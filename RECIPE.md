@@ -102,14 +102,25 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
   split; the archive icon → `tsk archive T<n>`; all refetch on success and print the
   command's own error text on failure.
 - Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
-  (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
-  keys of its own and ships no `keys.json`; everything else is Herdr's.
+  (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter.
+- Keys, once the column has the keyboard (`mod.json` says `focusable`, and `pane.go` reaching it sends
+  `"focus"` through `nextCommand()`, which focuses the view's handle): `j`/`k` (or ↓/↑) walk the rows in
+  the order they are drawn, `Enter` opens the row, `s` starts the selected task or stops its agent, `d`
+  finishes it (still asking before it takes a tab), `o` walks to the tab the task lives in, `t` cycles
+  the grouping, `/` puts the cursor in the filter, `Escape` drops the selection and the filter. Chords
+  belong to the app, and both inputs stop plain keys so a title can contain `s` and `d`. No `keys.json`
+  is shipped: the column answers keys, it does not claim any.
 - The map needs a clock, and `tsk list --json` has none: its twelve fields carry no `history` and no
   `created_at`, so before this the only dated wait on the board was an open review. Each refetch
   therefore also reads `~/.tsk/tsk.json` with `readTextFile` and folds each task's `history` and
   `created_at` in by number (`enrichTasks`). The read is advisory — a missing store is not an error,
   the panel just shows `—` where it cannot prove an age — and it is one read per refetch, not one per
   task.
+- The watch is louder than the file. `watchFolder("~/.tsk")` resolves dozens of times a minute — reading
+  `tsk.json` counts as an event on some volumes, and a resolve can carry nothing — so the loop refetches
+  at most once a second (`Date.now() - this.loadedAt > 1000`) and sleeps 250ms after each resolve. A bare
+  `for (;;) await watchFolder(dir)` read `tsk` 144 times in 22 seconds and would have kept a core warm.
+  The interval chips stay as the safety net: a watch can be refused.
 - The ribbon never talks back. The panel publishes `shared("tsk.trace")` and `shared("tsk.sel")` after
   every refetch and on every selection; Herdr re-renders *every* mod when a shared value changes, so a
   ribbon that published would redraw itself forever. It reads `shared("tsk.trace")`, measures itself
@@ -140,7 +151,9 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 
 - `main.js` imports `herdr` and draws all three. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
   `terminals`, `home`, `knownAgents`, `notify`, `playSound`, `shared`, `setShared`, `theme`, `settings`,
-  `layout`, `readTextFile` (tsk's store, for the clocks the list omits), `props`. Drawing uses `gpui-kit` (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`,
+  `layout`, `readTextFile` (tsk's store, for the clocks the list omits), `nextCommand` (the `"focus"`
+  the app sends when `pane.go` gives the column the keyboard), `watchFolder` (`~/.tsk`, so a status
+  changed in a terminal lands without waiting out the interval), `props`. Drawing uses `gpui-kit` (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`,
   `h_flex`, `InputState`, `Input`). Commands it runs: `layout.toggle`, `layout.hide`, `terminal.show`,
   `tab.new` (fallback and Board), and `hc run` / `hc kill` through `hc()`.
 - `model.js` has no Herdr imports: `LIST` (the two-command shell script), `PATHS` (prepends

@@ -9,6 +9,7 @@ import {
   hcRunArgs, taskTerminal, isLive,
   actorIdOf, actorKindOf, actorOf, holderOf, needsYou, courtSince, ageOf, eventsOf, custodyOf,
   linksOf, linkOf, groupBy, traceOf, loadOf, mapOf, enrichTasks, RAIL, stageOf, reviewLeft,
+  KEY_ACTION, keyAction, moveSel,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -640,4 +641,32 @@ test("enrichTasks folds the store's history in, without touching the list fields
   assert.equal(Math.round((NOW - courtSince(out[0])) / 60000), 90);
   assert.equal(enrichTasks(rows, null).length, 2);
   assert.deepEqual(enrichTasks(null, store), []);
+});
+
+test("keyAction: plain keys only, chords belong to somebody else", () => {
+  assert.equal(keyAction("j"), "next");
+  assert.equal(keyAction("J"), "next");
+  assert.equal(keyAction("ArrowDown"), "next");
+  assert.equal(keyAction("ArrowUp"), "prev");
+  assert.equal(keyAction("Enter"), "open");
+  assert.equal(keyAction("/"), "filter");
+  assert.equal(keyAction("escape"), "clear");
+  assert.equal(keyAction("j", { control: true }), null);
+  assert.equal(keyAction("j", { alt: true }), null);
+  assert.equal(keyAction("s", { platform: true }), null);
+  assert.equal(keyAction("q"), null);
+  assert.equal(keyAction("", null), null);
+  assert.deepEqual(Object.keys(KEY_ACTION).sort(), ["/", "arrowdown", "arrowup", "d", "enter", "escape", "j", "k", "o", "s", "t"]);
+});
+
+test("moveSel: starts at the near end, holds at the ends, survives a vanished row", () => {
+  assert.equal(moveSel([3, 5, 8], null, 1), 3);
+  assert.equal(moveSel([3, 5, 8], null, -1), 8);
+  assert.equal(moveSel([3, 5, 8], 5, 1), 8);
+  assert.equal(moveSel([3, 5, 8], 5, -1), 3);
+  assert.equal(moveSel([3, 5, 8], 8, 1), 8);
+  assert.equal(moveSel([3, 5, 8], 3, -1), 3);
+  assert.equal(moveSel([3, 5, 8], 99, 1), 3);
+  assert.equal(moveSel([], 3, 1), null);
+  assert.equal(moveSel(null, 3, 1), null);
 });

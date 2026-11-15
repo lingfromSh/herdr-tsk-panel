@@ -13,7 +13,9 @@ whose court the task you pick is in.
   agent on it** through `hc`, in the background, in a terminal labeled with the task — so the row shows which
   agent is on it, whether it is still working, and one click walks you back to it; open the row and it also
   names the space and tab (`Pi · Fosun Work / 1`). `Done` and the capture input write through
-  tsk's own CLI; the tab-bar button carries a badge with the review + blocked count, so you see it with the
+  tsk's own CLI (`~/.tsk` is watched, so a task you change in a terminal shows up in the column at once);
+  with the column on the keyboard, `j`/`k` walk, `Enter` opens, `s` starts, `d` finishes, `o` walks to its
+  tab, `t` cycles the grouping, `/` filters. The tab-bar button carries a badge with the review + blocked count, so you see it with the
   column closed, and a task that changes status while you are elsewhere raises a notification.
 - **tsk ribbon** (`height: 64`) — the one line that was never on screen: who has the baton. With nothing
   chosen, `in court now`: how many live tasks wait in each actor's court (`You 2 · T73 1 · nobody 12`), and
@@ -30,7 +32,8 @@ whose court the task you pick is in.
 再加一条 64px 的 ribbon：没选任务时显示每个 actor 手上压着几件事，选中任务后画出它今天在谁手里流转过。
 `Start` 走 `hc run` 后台起 agent，终端带 `tsk=T<n>` 标签，所以面板能显示是哪个 agent 在跑、是否还在跑、点一下跳回该终端；
 展开任务还能看到它在哪个 space / tab（`Pi · Fosun Work / 1`）；
-任务状态一变就弹通知；刷新频率可在面板上选（关闭 / 5s / 15s / 1m / 5m）。
+任务状态一变就弹通知；`~/.tsk` 被监听，终端里改的状态立刻反映到列上（刷新频率仍可选：关闭 / 5s / 15s / 1m / 5m）；
+列拿到键盘后 `j`/`k` 上下、`Enter` 展开、`s` 启动、`d` 完成、`o` 跳到它的 tab、`t` 切换分组、`/` 过滤。
 面板放在**布局节点**里而不是每个 space 自己的 `panel` 栈里，所以切 space 不会丢。装法：`./install.sh`，然后 `layout.switch`。
 
 ## Install

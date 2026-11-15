@@ -11,7 +11,7 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import {
   exec, run, hc, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout,
-  terminals, notify, playSound, readTextFile, props as blockProps,
+  terminals, notify, playSound, readTextFile, nextCommand, watchFolder, props as blockProps,
 } from "herdr";
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
@@ -19,6 +19,7 @@ import {
   agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
   traceOf, loadOf, mapOf, enrichTasks, actorIdOf, linksOf, linkOf, groupBy, stageOf, reviewLeft,
+  keyAction, moveSel,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
@@ -197,7 +198,8 @@ export default class Tsk extends View {
     this.openTask = null;
     try { this.by = BY.indexOf(localStorage.getItem(BY_KEY)) >= 0 ? localStorage.getItem(BY_KEY) : "project"; } catch (_e) { this.by = "project"; }
     this.links = []; // `tsk=T<n>` terminals and task-named tabs, per refetch: which tab a task lives in
-    this.sel = null; // the task number the ribbon traces: set by a click, cleared when it is gone
+    this.sel = null; // the task number the ribbon traces: set by a click or a key, gone when it is
+    this.order = []; // the task numbers as the list draws them: j and k walk this, not the store
     this.confirm = null; // the row asking whether Done should close the agent's tab
     this.notice = null;
     this.noticeAt = 0;
@@ -219,6 +221,36 @@ export default class Tsk extends View {
     this.filter.on("change", (_e, cx) => { this.query = this.filter.value(); cx.notify(); });
     this.capture = InputState.new({ placeholder: "New task — Enter adds it" });
     this.capture.on("submit", (_e, cx) => this.addTask(cx));
+
+    // pane.go can hand this column the keyboard (mod.json says focusable): the copy is told "focus".
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "focus" && this.handle) this.handle.focus();
+        cx.notify();
+      }
+    });
+
+    // tsk's store is the one file this panel depends on, so watch it rather than waiting out the
+    // interval: a status changed in a terminal lands in the column as it is written. The interval
+    // stays as the safety net, because a watch can be refused (a tree too big, a Linux volume).
+    //
+    // The watch resolves far more often than the store changes — reading `tsk.json` is itself an
+    // event on some volumes, and a resolve can carry nothing — so a bare loop would read tsk a
+    // hundred times a minute. One refetch a second is the ceiling; anything faster is the watch
+    // talking to itself.
+    cx.spawn(async (cx) => {
+      for (;;) {
+        try {
+          await watchFolder(`${home()}/.tsk`);
+        } catch (_e) {
+          await cx.sleep(10000);
+          continue;
+        }
+        if (!this.loading && Date.now() - this.loadedAt > 1000) this.refresh(cx);
+        await cx.sleep(250);
+      }
+    });
 
     // Refetching: the strip's chips set how often, and "off" leaves only the refresh button, a
     // refetch when the column comes back, and the one after a write.
@@ -726,6 +758,52 @@ export default class Tsk extends View {
         .child(div().text_size(9).text_color(t.dim).child("pick one to trace")));
   }
 
+  /** The task the cursor is on, found by number across every project card. */
+  selTask() {
+    if (this.sel == null) return null;
+    for (const p of this.projects) for (const task of p.tasks) if (task.number === this.sel) return task;
+    return null;
+  }
+
+  /**
+   * Keys, while this column holds the keyboard. The letters are the ones a hand already has on a
+   * task list — j/k walk, Enter opens, s starts or stops, d finishes, o goes to its tab, t changes
+   * the grouping, / filters, Escape drops the selection. Chords are left to the app and the
+   * terminal, and anything typed into the filter never reaches here.
+   */
+  onKey(e, cx) {
+    const act = keyAction(e && e.key, (e && e.modifiers) || {});
+    if (!act) return;
+    cx.stop_propagation();
+    const task = this.selTask();
+    if (act === "next" || act === "prev") {
+      const n = moveSel(this.order, this.sel, act === "next" ? 1 : -1);
+      if (n != null) { this.sel = n; this.publish(); }
+    } else if (act === "open") {
+      if (task) this.openTask = this.openTask === task.id ? null : task.id;
+    } else if (act === "start" && task) {
+      if (task.term) this.stop(task, cx); else this.startTask(task, cx);
+    } else if (act === "done" && task) {
+      this.done(task, cx);
+    } else if (act === "goto" && task) {
+      const link = linkOf(task, this.links);
+      if (link && link.space) run("space.select", { id: link.space });
+      if (link && link.tab) run("tab.select", { id: link.tab });
+      if (!link && task.term) this.show(task.term);
+    } else if (act === "group") {
+      this.setBy(cx);
+    } else if (act === "filter") {
+      this.filter.focus();
+    } else if (act === "clear") {
+      this.sel = null;
+      this.openTask = null;
+      this.query = "";
+      this.filter.set_value("");
+      this.publish();
+    }
+    cx.notify();
+  }
+
   panel(ctx) {
     const t = theme();
     const node = find(layout(), PANEL);
@@ -738,6 +816,7 @@ export default class Tsk extends View {
     const totals = totalsOf(this.projects);
 
     return v_flex().id("tsk").track_focus(this.handle).size_full().min_h(0).rounded(10).overflow_hidden()
+      .on_key_down((e, cx) => this.onKey(e, cx))
       .bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(S().body)
       .child(this.header(t, totals, node))
       .child(this.strip(t, totals))
@@ -786,6 +865,11 @@ export default class Tsk extends View {
   tools(t) {
     return h_flex().flex_none().px(10).pb(8).gap(6)
       .child(h_flex().flex_1().min_w(0).h(28).px(8).gap(6).items_center().rounded(6).border_1().border_color(t.border).bg(t.chrome)
+        // Typing in the filter is typing: a plain key stops here instead of also moving the cursor.
+        .on_key_down((e, cx) => {
+          const m = (e && e.modifiers) || {};
+          if (!m.control && !m.alt && !m.platform && e.key !== "escape") cx.stop_propagation();
+        })
         .child(icon("search", 12, t.muted))
         .child(Input.new(this.filter).flex_1().min_w(0).h_full().text_size(S().secondary).text_color(t.foreground)))
       .child(secondary("desk-board", "Board", t, () => run("tab.new", { name: "tsk", argv: ["tsk"] }), { h: 28, px: 8 }))
@@ -831,8 +915,10 @@ export default class Tsk extends View {
         .child(note(t, this.query.trim() ? "Nothing matches the filter." : "No live tasks."))
         .child(note(t, this.query.trim() ? "" : "Add one below — it lands in the space's project."));
     }
-    if (this.by === "project") return v_flex().pt(2).pb(10).gap(2).children(projects.map((p) => this.card(t, p)));
     const tasks = projects.reduce((all, p) => all.concat(filterTasks(p.tasks, this.query)), []);
+    // What j and k walk: the same numbers, in the same order, as the rows on screen.
+    this.order = tasks.map((task) => task.number);
+    if (this.by === "project") return v_flex().pt(2).pb(10).gap(2).children(projects.map((p) => this.card(t, p)));
     if (this.by === "map") return this.map(t, tasks);
     return this.groups(t, tasks);
   }
@@ -845,6 +931,7 @@ export default class Tsk extends View {
    */
   map(t, tasks) {
     const m = mapOf(tasks, { now: Date.now(), actors: this.actorsFor(tasks) });
+    this.order = m.rows.map((r) => r.n);
     return v_flex().pt(2).pb(10).gap(1)
       .child(h_flex().h(24).pl(10).pr(10).gap(8).items_center()
         .child(div().flex_1().text_size(S().label).text_color(t.muted).child("in court now"))
@@ -1026,6 +1113,11 @@ export default class Tsk extends View {
         .child(icon(target ? "folder" : "desk", 11, t.muted))
         .child(div().flex_1().min_w(0).truncate().child(target ? `new task → ${target.name}` : "new task → desk")))
       .child(h_flex().flex_1().min_w(0).h(30).px(8).gap(6).items_center().rounded(6).border_1().border_color(t.border).bg(t.chrome)
+        // A new task's title is typing too: `s` belongs to the sentence, not to Start.
+        .on_key_down((e, cx) => {
+          const m = (e && e.modifiers) || {};
+          if (!m.control && !m.alt && !m.platform && e.key !== "escape") cx.stop_propagation();
+        })
         .child(icon("plus", 13, t.muted))
         .child(Input.new(this.capture).flex_1().min_w(0).h_full().text_size(S().secondary).text_color(t.foreground)));
   }

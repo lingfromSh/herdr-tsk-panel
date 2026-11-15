@@ -290,6 +290,45 @@ export function enrichTasks(tasks, store) {
 }
 
 /**
+ * The keys the panel answers while it has the keyboard, and what each one means. One table so the
+ * README, the handler and the tests cannot drift apart. Plain letters only: a chord with ctrl, alt
+ * or the platform key belongs to the app or the terminal, not to a task list.
+ */
+export const KEY_ACTION = {
+  j: "next", arrowdown: "next",
+  k: "prev", arrowup: "prev",
+  enter: "open",
+  s: "start",
+  d: "done",
+  o: "goto",
+  t: "group",
+  "/": "filter",
+  escape: "clear",
+};
+
+/** What one key press means, or null when it means nothing here. */
+export function keyAction(key, modifiers = {}) {
+  const mods = modifiers || {};
+  if (mods.control || mods.alt || mods.platform) return null;
+  const hit = KEY_ACTION[String(key || "").toLowerCase()];
+  return hit || null;
+}
+
+/**
+ * Move the cursor one step through the numbers currently on screen. Nothing selected starts at the
+ * near end, so the first `j` lands on the first row rather than the second; the ends hold instead of
+ * wrapping, because a list you can leave by holding one key is a list you fall out of by accident.
+ */
+export function moveSel(order, current, delta) {
+  const list = Array.isArray(order) ? order.filter((n) => n != null) : [];
+  if (!list.length) return null;
+  const at = list.indexOf(current);
+  if (at < 0) return delta < 0 ? list[list.length - 1] : list[0];
+  const next = at + (delta < 0 ? -1 : 1);
+  return list[Math.max(0, Math.min(list.length - 1, next))];
+}
+
+/**
  * The relay map: one row per live task, longest wait first, with `pct` = how long it has sat in
  * its court relative to the longest wait on the board, so the shape of the list is the shape of
  * the day. A task with no clock sorts last and draws no bar (`pct: 0`).
