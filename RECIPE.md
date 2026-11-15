@@ -38,13 +38,20 @@ The tsk column is a card: white surface, 10px radius, 1px border, one column of:
 - a strip of at most three chips — `review`, `blocked`, `started` — each a 6px dot plus `1 review`, with
   review and blocked in their status colour and started in muted; `nothing needs you` when empty; the count
   of finished tasks (`1 done`) pinned right;
-- a filter input (`Filter tasks`), a `Board` button and a row of interval chips — `off`, `5s`, `15s`,
-  `1m`, `5m` — one of them selected;
+- a filter input (`Filter tasks`), a `Board` button and a `by project` chip that cycles to `by court`
+  and `by stage` — then a row of interval chips — `off`, `5s`, `15s`, `1m`, `5m` — one of them selected;
 - one card per project: name, `4 live · 1 done`, a progress bar (one colour segment per status, done
-  at half opacity), the attention pills (`1 review`, `1 blocked`), and the tasks — `T3` in the status
-  colour, the title, thread/assignee chips when set, and a terminal chip when an agent runs for it;
-  clicking a task unfolds `why blocked`, `review: 2/3 checks`, the last activity line, `Open` / `Stop`
-  for its agent's terminal, and `Start` / `Done`; an archive icon sits at the end of every row;
+  at half opacity), the attention pills (`1 review`, `1 blocked`), and the tasks. By `court` or `stage`
+  the cards give way to flat groups (`You · oldest 2d · 2`, `T73`, `nobody`, or `review` / `open`), each
+  carrying how many tasks it holds and how long the oldest has waited;
+- a task row, left to right: a five-tick staircase (where it sits in `open → ready → started → review →
+  done`, only the standing tick in the status colour, `blocked` parked on `started` in the blocked
+  colour), `T<n>`, the title, a tab chip when a terminal or a tab names it (clicking walks to that space
+  and tab), the project's name in the flat groupings, a thread icon, and an archive icon. A row with an
+  agent terminal also carries the agent's own icon and name;
+- clicking a task unfolds the review's checks one by one (`○` still open, `✓` done), `why blocked`,
+  `review: 2/3 checks`, `Open` / `Stop` for its agent's terminal, and `Start` / `Done` — which reads
+  `Approve` on a review, or `Approve · 2 left` while checks are still open;
 - a capture input at the bottom: `new task → aurora-api`, placeholder `New task — Enter adds it`.
 
 Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`, `started` = `working`,

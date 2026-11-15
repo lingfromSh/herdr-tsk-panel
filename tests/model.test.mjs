@@ -8,7 +8,7 @@ import {
   snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
   hcRunArgs, taskTerminal, isLive,
   actorIdOf, actorKindOf, actorOf, holderOf, needsYou, courtSince, ageOf, eventsOf, custodyOf,
-  linksOf, linkOf, groupBy, traceOf, loadOf,
+  linksOf, linkOf, groupBy, traceOf, loadOf, RAIL, stageOf, reviewLeft,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -583,4 +583,21 @@ test("loadOf: one entry per court, nobody included, with the oldest wait", () =>
     ["", "nobody", 1, null],
   ]);
   assert.deepEqual(loadOf(null).load, []);
+});
+
+test("stageOf: the pipeline, with blocked parked on started", () => {
+  assert.deepEqual(RAIL, ["open", "ready", "started", "review", "done"]);
+  assert.deepEqual(RAIL.map((s) => stageOf({ status: s })), [0, 1, 2, 3, 4]);
+  assert.equal(stageOf({ status: "blocked" }), 2);
+  assert.equal(stageOf({ status: "nonsense" }), 0);
+  assert.equal(stageOf(null), 0);
+});
+
+test("reviewLeft counts only the checks still open", () => {
+  assert.equal(reviewLeft(null), 0);
+  assert.equal(reviewLeft({ status: "review", review: null }), 0);
+  const checks = [{ text: "a", state: "open" }, { text: "b", state: "pass" }, { text: "c", state: "open" }];
+  assert.equal(reviewLeft({ status: "review", review: { checks } }), 2);
+  assert.equal(reviewLeft({ status: "started", review: { checks } }), 2);
+  assert.equal(reviewLeft({ status: "review", review: { checks: [] } }), 0);
 });

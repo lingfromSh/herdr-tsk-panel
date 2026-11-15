@@ -6,7 +6,8 @@ whose court the task you pick is in.
 
 ![herdr-work](preview.png)
 
-- **tsk column** — every task that waits on your review, is blocked, or is moving, grouped by project, with
+- **tsk column** — every task that waits on your review, is blocked, or is moving, grouped by project — or
+  by `court` (whose turn it is: you, an agent, another task) and by stage, one chip away — with
   the project your current space sits in first and unfolded. `Start` marks a task started **and runs a coding
   agent on it** through `hc`, in the background, in a terminal labeled with the task — so the row shows which
   agent is on it, whether it is still working, and one click walks you back to it; open the row and it also

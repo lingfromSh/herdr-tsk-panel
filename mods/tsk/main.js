@@ -18,7 +18,7 @@ import {
   filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, pickAgent, launchArgs, agentBrief, hcError,
   agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
-  traceOf, loadOf, actorIdOf,
+  traceOf, loadOf, actorIdOf, linksOf, linkOf, groupBy, stageOf, reviewLeft,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
@@ -27,6 +27,9 @@ const TRACE = "tsk.trace"; // shared: what the ribbon draws — a task's custody
 const SEL = "tsk.sel"; // shared: the task number the ribbon is tracing
 const DESK = "·desk"; // the expanded-set key for tasks that belong to no project
 const POLL_KEY = "tsk.poll"; // localStorage: the interval this panel last used
+const BY_KEY = "tsk.by"; // localStorage: how the list groups — by project, by court, by stage
+const BY = ["project", "court", "stage"];
+
 const NOTICE_MS = 5000;
 
 // ---- Running tsk ----
@@ -81,6 +84,29 @@ const clock = (ms) => {
   const d = new Date(ms), h = d.getHours(), m = d.getMinutes();
   return `${h < 10 ? "0" : ""}${h}:${m < 10 ? "0" : ""}${m}`;
 };
+/** Minutes → `12m`, `3.4h`, `2d`: how long something has been waiting. */
+const ageLabel = (m) => {
+  const v = Math.max(0, Math.round(Number(m) || 0));
+  if (v < 60) return `${v}m`;
+  if (v < 1440) return `${(v / 60).toFixed(v < 600 ? 1 : 0)}h`;
+  return `${Math.round(v / 1440)}d`;
+};
+
+/**
+ * Five ticks, not a dot: a dot says what a task is, the rail says how far it walked.
+ * `blocked` is not a stage of its own — it parks on `started`, in the blocked colour.
+ */
+function rail(t, task) {
+  const at = stageOf(task);
+  const ink = STATUS_COLOR(t, task.status);
+  // A staircase, not a row of dots: the tallest tick is how far the task walked, and only the
+  // stage it stands on carries the status colour, so a 2px-wide tick still reads at 380px.
+  const steps = [3, 5, 7, 9, 11];
+  return h_flex().w(23).flex_none().gap(2).items_end().h(11)
+    .children(steps.map((h, i) => div().flex_1().h(h).rounded(1)
+      .bg(i === at ? ink : (i < at ? t.dim : t.border)).opacity(i === at ? 1 : (i < at ? 0.75 : 0.9))));
+}
+
 /** `/Users/me/work/api` → `api`: the ribbon has 112px, not a path. */
 const projectName = (path) => String(path || "").replace(/\/+$/, "").split("/").pop() || "";
 
@@ -169,6 +195,8 @@ export default class Tsk extends View {
     this.agents = null; // knownAgents() once: the coding agents Start may run
     this.expanded = new Set();
     this.openTask = null;
+    try { this.by = BY.indexOf(localStorage.getItem(BY_KEY)) >= 0 ? localStorage.getItem(BY_KEY) : "project"; } catch (_e) { this.by = "project"; }
+    this.links = []; // `tsk=T<n>` terminals and task-named tabs, per refetch: which tab a task lives in
     this.sel = null; // the task number the ribbon traces: set by a click, cleared when it is gone
     this.confirm = null; // the row asking whether Done should close the agent's tab
     this.notice = null;
@@ -248,6 +276,9 @@ export default class Tsk extends View {
     try { rows = terminals() || []; } catch (_e) { rows = []; }
     this.terminals = rows;
     for (const p of this.projects) for (const task of p.tasks) task.term = taskTerminal(task, rows);
+    let open = [];
+    try { open = spaces() || []; } catch (_e) { open = []; }
+    this.links = linksOf(rows, open);
   }
 
   /** Folders the open spaces sit in: a project holding one is the current one. */
@@ -743,7 +774,26 @@ export default class Tsk extends View {
       .child(h_flex().flex_1().min_w(0).h(28).px(8).gap(6).items_center().rounded(6).border_1().border_color(t.border).bg(t.chrome)
         .child(icon("search", 12, t.muted))
         .child(Input.new(this.filter).flex_1().min_w(0).h_full().text_size(S().secondary).text_color(t.foreground)))
-      .child(secondary("desk-board", "Board", t, () => run("tab.new", { name: "tsk", argv: ["tsk"] }), { h: 28, px: 8 }));
+      .child(secondary("desk-board", "Board", t, () => run("tab.new", { name: "tsk", argv: ["tsk"] }), { h: 28, px: 8 }))
+      .child(this.byChip(t));
+  }
+
+  /**
+   * How the list is grouped: project cards (what ships today), whose court, or which stage.
+   * One chip that cycles — three buttons do not fit beside the filter at 380px.
+   */
+  byChip(t) {
+    const label = { project: "by project", court: "by court", stage: "by stage" }[this.by] || "by project";
+    return h_flex().id("by-cycle").h(28).px(7).flex_none().items_center().rounded(6).cursor_pointer()
+      .hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
+      .on_click((_e, cx) => this.setBy(cx))
+      .child(div().text_size(S().label).text_color(t.muted).child(label));
+  }
+
+  setBy(cx) {
+    this.by = BY[(BY.indexOf(this.by) + 1) % BY.length];
+    try { localStorage.setItem(BY_KEY, this.by); } catch (_e) { /* storage off: the choice lives this run */ }
+    cx.notify();
   }
 
   /** The refetch interval: chips rather than a menu, because the panel is 330px and this is one row. */
@@ -767,7 +817,29 @@ export default class Tsk extends View {
         .child(note(t, this.query.trim() ? "Nothing matches the filter." : "No live tasks."))
         .child(note(t, this.query.trim() ? "" : "Add one below — it lands in the space's project."));
     }
-    return v_flex().pt(2).pb(10).gap(2).children(projects.map((p) => this.card(t, p)));
+    if (this.by === "project") return v_flex().pt(2).pb(10).gap(2).children(projects.map((p) => this.card(t, p)));
+    const tasks = projects.reduce((all, p) => all.concat(filterTasks(p.tasks, this.query)), []);
+    return this.groups(t, tasks);
+  }
+
+  /**
+   * Flat groups: whose court the task is in, or which stage it sits at. No project cards, so the
+   * row carries the project and the tab it lives in — and the group header carries the oldest wait,
+   * because that is the number that decides what you open first.
+   */
+  groups(t, tasks) {
+    const now = Date.now();
+    const list = groupBy(tasks, this.by === "court" ? "holder" : "stage",
+      { now, actors: this.actorsFor(tasks), links: this.links });
+    return v_flex().pt(2).pb(10).gap(1).children(list.map((g) => v_flex().gap(1)
+      .child(h_flex().h(24).pl(10).pr(10).gap(6).items_center()
+        .child(dot(g.kind === "stage" ? STATUS_COLOR(t, g.key) : ACTOR_INK(t, g.kind), 5))
+        .child(div().flex_1().min_w(0).truncate().text_size(S().label).text_color(t.muted).child(g.title))
+        .when(g.oldest != null, (el) => el.child(div().text_size(S().label)
+          .text_color(g.kind === "you" && g.oldest > 60 ? STATUS_COLOR(t, "review") : t.dim)
+          .child(`oldest ${ageLabel(g.oldest)}`)))
+        .child(div().text_size(S().label).text_color(t.dim).child(String(g.rows.length))))
+      .children(g.rows.map((task) => this.taskRow(t, task, true)))));
   }
 
   card(t, p) {
@@ -803,9 +875,17 @@ export default class Tsk extends View {
           .text_size(S().label).text_color(t.muted).child(`+${tasks.length - 60} more`)))));
   }
 
-  taskRow(t, task) {
+  taskRow(t, task, flat) {
     const open = this.openTask === task.id, hint = taskHint(task), term = task.term || null;
     const id = this.idOf(task.id);
+    const link = linkOf(task, this.links);
+    const checks = (task.review && Array.isArray(task.review.checks)) ? task.review.checks : [];
+    const left = reviewLeft(task);
+    // A review is not "Done", it is a judgement: name the button after it, and say how many
+    // checks are still open when some are.
+    const closing = task.status === "review"
+      ? (left ? `Approve \u00b7 ${left} left` : "Approve")
+      : "Done";
     return v_flex()
       .child(h_flex().id(`task-${id}`).h(27).pl(27).pr(8).gap(6).items_center().rounded(5).cursor_pointer()
         .hover((s) => s.bg(open ? t.selected : t.hover)).when(open, (el) => el.bg(t.selected))
@@ -816,9 +896,23 @@ export default class Tsk extends View {
           this.publish();
           cx.notify();
         })
-        .child(dot(STATUS_COLOR(t, task.status), 6))
-        .child(div().w(28).flex_none().text_size(S().label).text_color(t.muted).child(`T${task.number}`))
+        .child(rail(t, task))
+        .child(div().w(32).flex_none().text_size(S().label).text_color(t.muted).child(`T${task.number}`))
         .child(div().flex_1().min_w(0).truncate().text_size(S().secondary).child(task.title))
+        // The tab the task is open in: clicking it walks there, which is the whole point of
+        // holding tasks, tabs and spaces in one table.
+        .when(Boolean(link), (el) => el.child(h_flex().id(`link-${id}`).h(15).max_w(64).px(3).gap(3).flex_none()
+          .items_center().rounded(3).bg(t.chrome).cursor_pointer()
+          .hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
+          .on_click(() => {
+            if (link.space) run("space.select", { id: link.space });
+            if (link.tab) run("tab.select", { id: link.tab });
+          })
+          .child(icon("terminal", 9, link.live ? t.working : t.dim))
+          .child(div().min_w(0).truncate().text_size(S().label).text_color(t.muted)
+            .child(link.name || `tab ${String(link.tab || "").slice(-4)}`))))
+        .when(Boolean(flat) && Boolean(task.project), (el) => el.child(div().max_w(70).flex_none().truncate()
+          .text_size(S().label).text_color(t.dim).child(projectName(task.project))))
         .when(Boolean(task.assignee) && task.assignee !== "you", (el) => el.child(icon("bot", 11, t.working)))
         .when(Boolean(term), (el) => el.child(h_flex().id(`term-${id}`).h(16).px(3).gap(3).items_center()
           .rounded(4).cursor_pointer().hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
@@ -832,6 +926,12 @@ export default class Tsk extends View {
           .cursor_pointer().hover((s) => s.bg(t.selected)).on_mouse_down("left", stop)
           .on_click((_e, cx) => this.archive(task, cx))
           .child(icon("archive", 11, t.dim))))
+      .when(open && checks.length > 0 && this.confirm !== id, (el) => el.child(v_flex().pl(33).pr(8).pb(2).gap(1)
+        .children(checks.slice(0, 6).map((c) => h_flex().gap(5).items_center()
+          .child(icon(c.state === "open" ? "circle" : "check", 9,
+            c.state === "open" ? t.dim : (c.state === "fail" ? STATUS_COLOR(t, "blocked") : t.done)))
+          .child(div().flex_1().min_w(0).truncate().text_size(S().label)
+            .text_color(c.state === "open" ? t.muted : t.dim).child(String(c.text || "")))))))
       .when(open && this.confirm !== id, (el) => el.child(h_flex().pl(33).pr(8).pb(6).gap(6).items_center()
         .child(div().flex_1().min_w(0).truncate().text_size(S().label).text_color(t.muted).child(hint || LABEL[task.status]))
         .when(Boolean(term), (el) => el.child(secondary(`go-${id}`, "Open", t, () => this.show(term), { h: 22, px: 7, size: S().label })))
@@ -842,7 +942,7 @@ export default class Tsk extends View {
         .when(task.status !== "done" && (task.status === "open" || task.status === "ready" || (task.status === "started" && !isLive(term))),
           (el) => el.child(secondary(`start-${id}`, isLive(term) ? "Restart" : "Start", t,
             (_e, cx) => this.startTask(task, cx), { h: 22, px: 7, size: S().label })))
-        .when(task.status !== "done", (el) => el.child(secondary(`done-${id}`, "Done", t,
+        .when(task.status !== "done", (el) => el.child(secondary(`done-${id}`, closing, t,
           (_e, cx) => this.done(task, cx), { h: 22, px: 7, size: S().label }))))
       // Done asks about the tab it would leave behind: the agent's own tab goes with the task, a
       // split tab keeps its other terminals.

@@ -250,6 +250,23 @@ export function taskHint(task) {
   return task.thread ? `#${task.thread}` : "";
 }
 
+/** The pipeline a task walks. `blocked` is not a stage: it parks on `started`. */
+export const RAIL = ["open", "ready", "started", "review", "done"];
+
+/** How far along that pipeline a task is, as an index into RAIL. */
+export function stageOf(task) {
+  const status = task && task.status;
+  if (status === "blocked") return RAIL.indexOf("started");
+  const i = RAIL.indexOf(status);
+  return i < 0 ? 0 : i;
+}
+
+/** Review checks still open — what an Approve button counts down. Zero when there is no review. */
+export function reviewLeft(task) {
+  const checks = (task && task.review && Array.isArray(task.review.checks)) ? task.review.checks : [];
+  return checks.filter((c) => c && c.state === "open").length;
+}
+
 /** The first message a coding agent gets when a task's Start is pressed. */
 export function agentBrief(task, projectPath) {
   const where = task.project || projectPath || "";
