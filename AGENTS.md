@@ -14,6 +14,9 @@ none of this is part of Herdr's Go build.
 - Herdr theme tokens only, never hard-coded colours. Never keep a `cx` past its callback, call
   `setShared`/`cx.notify` during render (use `later(cx, …)`), or pass `null` to `.child`.
 - Element ids that carry a path or uuid go through `idOf()`; the same id twice in one tree is a bug.
+- An own field set in `init` must not share a name with a method: `this.done = 0` shadowed `done()`, so
+  the Approve button called a number and QuickJS dropped the TypeError into a click that did nothing.
+  `tests/shadow.test.mjs` fails on the collision — rename the field, not the method.
 - Install by **copying** `mods/tsk` into `~/.config/herdr-app/mods/` — a symlinked mod is not hot-reloaded.
   `./install.sh` does the copy, keeps a `.before-<stamp>` backup, and runs the check.
 - `preview.png` and `layouts/herdr-work.png` are screenshots of a real window, so they carry the author's

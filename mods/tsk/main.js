@@ -188,7 +188,9 @@ export default class Tsk extends View {
 
     this.handle = cx.focus_handle();
     this.projects = [];
-    this.done = 0;
+    // `doneCount`, not `done`: an own field named like a method shadows it, and the Approve
+    // button's handler would then call a number. QuickJS swallows that into "the click did nothing".
+    this.doneCount = 0;
     this.error = null;
     this.loadedAt = 0;
     this.loading = false;
@@ -287,7 +289,7 @@ export default class Tsk extends View {
         const store = await this.readStore();
         const live = enrichTasks(parsed.live, store), done = enrichTasks(parsed.done, store);
         this.projects = buildProjects(live, done, this.openFolders());
-        this.done = parsed.done.length;
+        this.doneCount = parsed.done.length;
         this.attachTerminals();
         this.loadedAt = Date.now();
         this.refreshed = true;
@@ -859,7 +861,7 @@ export default class Tsk extends View {
       : [div().text_size(S().label).text_color(t.muted).child("nothing needs you")];
     return h_flex().flex_none().h(26).px(12).gap(10).items_center()
       .child(h_flex().flex_1().min_w(0).overflow_hidden().gap(9).items_center().children(chips))
-      .child(div().flex_none().text_size(S().label).text_color(t.muted).child(`${totals.done || this.done} done`));
+      .child(div().flex_none().text_size(S().label).text_color(t.muted).child(`${totals.done || this.doneCount} done`));
   }
 
   tools(t) {
