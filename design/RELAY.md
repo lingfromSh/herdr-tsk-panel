@@ -320,7 +320,7 @@ opened`), or absent.
 | Phase | Scope | Done when |
 |---|---|---|
 | **P0** ✅ | `model.js`: `holderOf`, `custodyOf` (tier 1 + ledger merge), `needsYou`, `groupBy`, `linksOf`/`linkOf`, `courtSince`/`ageOf`, `eventsOf`, `actorIdOf`/`actorOf`, and `normalize` keeping `assignee_kind`/`after`. 16 tests. | `node --test tests/` 47/47 green, no UI change yet |
-| **P1** | `role: "ribbon"` block + layout delta. Read-only. | Selecting a task redraws the instrument; no console errors under QuickJS |
+| **P1** ✅ | `relay-ribbon` block (64px, between the tabs row and the body) + `traceOf`/`loadOf` in `model.js` + the panel publishing `shared("tsk.trace")`. The ribbon only reads. | Selecting a task redraws the instrument — verified in a real window: `T78 review · holds You · in court 53h 46m` with one hollow lane; board mode reads `15 live · You 2 · T73 1 · nobody 12` |
 | **P2** | Panel regrouped by holder, stage ladder, tab chip, age per group, inline ask for done-with-tab, `Approve · N left`. | Board sorts by "who must act next"; done never closes a tab without asking |
 | **P2b** | `relay map` mode + `in court now` load block, both clickable into the board. | The morning question — "what is the shape of today" — answered without opening a task |
 | **P3** | Keys (`j k ⏎ s d o t /`), `shared("tsk.sel")`, `watchFolder`, rate chips re-pointed. | You can run a whole day without the mouse |

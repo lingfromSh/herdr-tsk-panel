@@ -711,3 +711,38 @@ export function groupBy(tasks, by = "holder", { now = Date.now(), actors = [], l
     (b.oldest || 0) - (a.oldest || 0) ||
     (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
 }
+
+/**
+ * Everything the ribbon draws about one task: the holder, the stretches of custody, the beads.
+ * `at` is the right edge of the axis, so a viewer can tell a stale payload from a live one.
+ */
+export function traceOf(task, { now = Date.now(), actors = [], ledger = [] } = {}) {
+  return {
+    mode: "task",
+    n: task.number,
+    title: String(task.title ?? ""),
+    project: task.project ? String(task.project) : null,
+    status: task.status,
+    holder: actorOf(holderOf(task), actors),
+    since: courtSince(task),
+    age: ageOf(task, now),
+    segments: custodyOf(task, now, ledger),
+    events: eventsOf(task),
+    actors: (Array.isArray(actors) ? actors : []).map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+    at: Number(now),
+  };
+}
+
+/** The board's trace — what the ribbon shows with nothing selected: how many tasks sit in each court. */
+export function loadOf(tasks, { now = Date.now(), actors = [] } = {}) {
+  const list = (Array.isArray(tasks) ? tasks : []).filter(Boolean);
+  const groups = groupBy(list, "holder", { now, actors });
+  return {
+    mode: "board",
+    at: Number(now),
+    total: list.length,
+    needsYou: list.filter(needsYou).length,
+    load: groups.map((g) => ({ id: g.key, name: g.title, kind: g.kind, n: g.rows.length, oldest: g.oldest })),
+    actors: (Array.isArray(actors) ? actors : []).map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+  };
+}

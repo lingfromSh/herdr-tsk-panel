@@ -18,10 +18,13 @@ import {
   filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, pickAgent, launchArgs, agentBrief, hcError,
   agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
+  traceOf, loadOf, actorIdOf,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
 const ATTENTION = "tsk.attention"; // shared: tasks in review or blocked, for the tab-bar badge
+const TRACE = "tsk.trace"; // shared: what the ribbon draws — a task's custody stretches, or the board's load
+const SEL = "tsk.sel"; // shared: the task number the ribbon is tracing
 const DESK = "·desk"; // the expanded-set key for tasks that belong to no project
 const POLL_KEY = "tsk.poll"; // localStorage: the interval this panel last used
 const NOTICE_MS = 5000;
@@ -60,6 +63,26 @@ const dot = (color, size = 8) => div().w(size).h(size).flex_none().rounded_full(
 const STATUS_COLOR = (t, status) => ({
   review: t.accent, blocked: t.blocked, started: t.working, ready: t.done, open: t.muted, done: t.dim,
 }[status] || t.muted);
+
+// Colour encodes the actor, never the chrome: a person and a machine must not look alike.
+const ACTOR_INK = (t, kind) => ({
+  you: t.foreground, agent: t.working, person: t.unknown, task: t.muted, other: t.dim,
+}[kind] || t.muted);
+
+/** 95 minutes → "1h 35m"; under an hour, "42m". */
+function dur(ms) {
+  const m = Math.max(0, Math.round(Number(ms) / 60000));
+  if (m < 1) return "<1m";
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60), r = m % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+const clock = (ms) => {
+  const d = new Date(ms), h = d.getHours(), m = d.getMinutes();
+  return `${h < 10 ? "0" : ""}${h}:${m < 10 ? "0" : ""}${m}`;
+};
+/** `/Users/me/work/api` → `api`: the ribbon has 112px, not a path. */
+const projectName = (path) => String(path || "").replace(/\/+$/, "").split("/").pop() || "";
 
 function primary(id, label, t, onClick, opts = {}) {
   const h = opts.h || 26;
@@ -125,6 +148,15 @@ export default class Tsk extends View {
   init(_props, cx) {
     const given = blockProps() || {};
     this.role = given.role || "panel";
+    if (this.role === "ribbon") {
+      // The ribbon owns no data: it draws the trace the panel publishes and re-renders when that
+      // value changes, plus a slow tick so the right edge of the axis walks forward between polls.
+      this.width = 0; // the plot's measured width, in logical px
+      cx.spawn(async (cx) => {
+        for (;;) { await cx.sleep(20000); cx.notify(); }
+      });
+      return;
+    }
     if (this.role === "toggle") return;
 
     this.handle = cx.focus_handle();
@@ -137,6 +169,7 @@ export default class Tsk extends View {
     this.agents = null; // knownAgents() once: the coding agents Start may run
     this.expanded = new Set();
     this.openTask = null;
+    this.sel = null; // the task number the ribbon traces: set by a click, cleared when it is gone
     this.confirm = null; // the row asking whether Done should close the agent's tab
     this.notice = null;
     this.noticeAt = 0;
@@ -200,6 +233,7 @@ export default class Tsk extends View {
           for (const p of this.projects) if (p.active) this.expanded.add(this.keyOf(p));
         }
         setShared(ATTENTION, totalsOf(this.projects).attention);
+        this.publish();
       }
       cx.notify();
     });
@@ -453,11 +487,198 @@ export default class Tsk extends View {
     run("tab.new", { name: b.name, folder: b.folder, argv: ["tsk"] });
   }
 
+  /**
+   * Who the panel knows about: you, then whoever holds or is assigned anything. Kind comes from
+   * tsk's own `assignee_kind`, so a person is never filed as an agent.
+   */
+  actorsFor(tasks) {
+    const out = [{ id: "you", name: "You", kind: "you" }];
+    const seen = new Set(["you"]);
+    const add = (raw, kind) => {
+      const id = actorIdOf(raw);
+      if (!id || seen.has(id)) return;
+      const person = kind === "person" || kind === "user" || id.indexOf("person:") === 0;
+      const rest = id.indexOf("task:") === 0 || id.indexOf("other:") === 0;
+      seen.add(id);
+      out.push({
+        id,
+        name: String(raw).replace(/^(agent|person|user):/, ""),
+        kind: person ? "person" : (rest ? "task" : "agent"),
+      });
+    };
+    for (const task of tasks || []) {
+      if (task.assignee) add(task.assignee, task.assigneeKind);
+      if (task.review && task.review.on) add(task.review.on);
+      if (task.block && task.block.on) add(task.block.on);
+    }
+    return out;
+  }
+
+  /**
+   * Hand the ribbon what to draw. Called from a task phase or a click handler, never from render:
+   * setShared re-renders every mod, so publishing mid-render would be a render that renders itself.
+   */
+  publish(now = Date.now()) {
+    const tasks = [];
+    for (const project of this.projects) for (const task of project.tasks) tasks.push(task);
+    const actors = this.actorsFor(tasks);
+    const sel = this.sel == null ? null : tasks.find((task) => task.number === this.sel) || null;
+    if (this.sel != null && !sel) this.sel = null; // done, archived, or filtered away
+    setShared(SEL, sel ? sel.number : null);
+    setShared(TRACE, sel ? traceOf(sel, { now, actors }) : loadOf(tasks, { now, actors }));
+  }
+
   // ---- Render ----
 
   render(cx) {
     if (this.role === "toggle") return toggle();
+    if (this.role === "ribbon") return this.ribbon(cx);
     return this.panel(cx);
+  }
+
+  // ---- The ribbon ----
+
+  /**
+   * One instrument, two readings. With a task chosen it is that task's custody gantt — a lane per
+   * actor, a bar per stretch the baton sat in their court, a bead where something happened. With
+   * nothing chosen it is the board: one segment per court, sized by how many tasks sit there.
+   */
+  ribbon(cx) {
+    const t = theme(), p = shared(TRACE) || null, W = this.width || 0;
+    // The plot measures itself: the axis is drawn in px, so the width has to be real. The first
+    // render has no width yet and guesses; the size event that follows corrects it once.
+    const plot = (children) => div().flex_1().min_w(0).h_full().relative().overflow_hidden()
+      .on_size_change((size, cx) => {
+        const w = Math.round(Number(size && size.width) || 0);
+        if (w > 0 && Math.abs(w - (this.width || 0)) > 4) { this.width = w; cx.notify(); }
+      })
+      .children(children);
+
+    if (!p) {
+      return h_flex().size_full().px(8).items_center()
+        .child(note(t, "relay — whose court each task is in"));
+    }
+    return p.mode === "task" ? this.ribbonTask(t, p, W, plot) : this.ribbonBoard(t, p, W, plot);
+  }
+
+  /** The chosen task's custody, in lanes. Solid bar = a machine held it, outline = a person did. */
+  ribbonTask(t, p, W, plot) {
+    const GUT = 58, R = 6, H = 64;
+    const pw = Math.max(60, (W || 860) - GUT - R);
+    const now = Number(p.at) || Date.now();
+    const segs = p.segments || [], events = p.events || [];
+    const firsts = segs.map((s) => s.from).filter((n) => typeof n === "number");
+    const earliest = firsts.length ? Math.min.apply(null, firsts) : now - 45 * 60000;
+    const t0 = Math.max(earliest - 6 * 60000, now - 8 * 3600000); // at most a workday of context
+    const span = Math.max(60000, now - t0);
+    const x = (ms) => GUT + ((Math.max(t0, Math.min(now, ms)) - t0) / span) * pw;
+
+    const lanes = [];
+    for (const s of segs) if (!lanes.some((l) => l.id === s.actor)) lanes.push({ id: s.actor, kind: s.kind });
+    // No proven custody: one lone lane of moments, so the strip never reads as "nothing happened".
+    const lane = lanes.length ? lanes : [{ id: "", kind: "other" }];
+    const n = lanes.length || 1;
+    const laneTop = (i) => (n === 1 ? 18 : 8 + (i * 30) / (n - 1));
+    const barH = n === 1 ? 10 : Math.min(10, 30 / (n - 1) - 5);
+    const laneIndex = (actor) => Math.max(0, lane.findIndex((l) => l.id === actor));
+    const nameOf = (id) => {
+      const actor = (p.actors || []).find((a) => a.id === id);
+      return actor ? actor.name : String(id);
+    };
+
+    const laneLabels = lane.map((row, i) => div().absolute().left(2).top(laneTop(i) - 1).w(GUT - 12)
+      .truncate().text_size(9).text_color(t.muted).child(row.id ? nameOf(row.id) : "changes"));
+
+    const bars = [];
+    for (const s of segs) {
+      const i = laneIndex(s.actor), ink = ACTOR_INK(t, s.kind);
+      const left = x(s.from), right = x(s.to);
+      const w = Math.max(3, right - left);
+      const machine = s.kind === "agent";
+      const live = Boolean(p.holder) && s.actor === p.holder.id && s.to >= now - 1000;
+      // Stretch starts before the window: say so at the axis instead of pretending it began at 10:00.
+      if (s.from < t0) bars.push(div().absolute().left(GUT - 4).top(laneTop(i)).w(4).h(barH).bg(ink).opacity(0.45));
+      bars.push(h_flex().absolute().left(left).top(laneTop(i)).w(w).h(barH).items_center().px(4).rounded(3)
+        .when(machine, (b) => b.bg(ink).opacity(live ? 0.5 : 0.85))
+        .when(!machine, (b) => b.border_1().border_color(ink).opacity(live ? 0.55 : 0.8))
+        .when(w >= 46 && barH >= 9, (b) => b.child(div().text_size(9)
+          .text_color(machine ? t.background : ink).child(dur(s.to - s.from)))));
+    }
+
+    // A handoff is a line between the two lanes plus the bead that marks the moment.
+    const joins = [];
+    for (let i = 1; i < segs.length; i++) {
+      const a = segs[i - 1], b = segs[i];
+      if (a.actor === b.actor) continue;
+      const ya = laneTop(laneIndex(a.actor)) + barH, yb = laneTop(laneIndex(b.actor));
+      joins.push(div().absolute().left(Math.round(x(b.from))).top(Math.min(ya, yb)).w(1)
+        .h(Math.max(1, Math.abs(yb - ya))).bg(t.border));
+    }
+    const beads = [];
+    for (const e of events) {
+      if (!(e.at >= t0 && e.at <= now)) continue;
+      const seg = segs.find((s) => e.at >= s.from && e.at <= s.to);
+      const kind = seg ? seg.kind : "other";
+      const i = seg ? laneIndex(seg.actor) : 0;
+      beads.push(div().absolute().left(x(e.at) - 2).top(laneTop(i) + barH / 2 - 2)
+        .size(4).rounded_full().bg(ACTOR_INK(t, kind)));
+    }
+
+    const grid = [], ticks = [];
+    const HOUR = 3600000;
+    for (let ms = Math.ceil(t0 / HOUR) * HOUR; ms <= now; ms += HOUR) {
+      const gx = Math.round(x(ms));
+      grid.push(div().absolute().left(gx).top(4).w(1).h(42).bg(t.border).opacity(0.55));
+      ticks.push(div().absolute().left(gx + 3).top(52).text_size(9).text_color(t.dim).child(clock(ms)));
+    }
+
+    const edge = [div().absolute().left(GUT + pw - 1).top(4).w(1).h(42).bg(t.border)];
+    if (p.holder) {
+      const i = lane.findIndex((l) => l.id === p.holder.id);
+      const cy = (i >= 0 ? laneTop(i) : 18) + barH / 2;
+      edge.push(div().absolute().left(GUT + pw - 3).top(cy - 3).size(6).rounded_full()
+        .bg(ACTOR_INK(t, p.holder.kind)));
+    }
+
+    const hold = p.holder;
+    return h_flex().size_full().px(8).gap(10).items_center()
+      .child(v_flex().w(150).flex_none().gap(1)
+        .child(h_flex().gap(5).items_center()
+          .child(dot(STATUS_COLOR(t, p.status), 6))
+          .child(div().text_size(11).font_semibold().child(`T${p.n}`))
+          .child(div().text_size(9).text_color(STATUS_COLOR(t, p.status))
+            .child(String(LABEL[p.status] || p.status).toUpperCase())))
+        .child(div().w_full().truncate().text_size(10).text_color(t.muted).child(p.title || ""))
+        .child(div().w_full().truncate().text_size(9).text_color(t.dim)
+          .child(`${segs.length ? `${segs.length} ${segs.length === 1 ? "stretch" : "stretches"}` : "no record of a hand over"}${projectName(p.project) ? ` · ${projectName(p.project)}` : ""}`)))
+      .child(plot(laneLabels.concat(grid, bars, joins, beads, ticks, edge)))
+      .child(v_flex().w(112).flex_none().items_end().gap(1)
+        .child(div().w_full().truncate().text_size(10).text_color(hold ? ACTOR_INK(t, hold.kind) : t.dim)
+          .child(hold ? `holds ${hold.name}` : "no holder"))
+        .child(div().text_size(9).text_color(t.dim)
+          .child(hold && p.age != null ? `in court ${dur(p.age * 60000)}` : "nobody's court")));
+  }
+
+  /** Nothing chosen: how many tasks sit in each court, as one segmented strip and a legend. */
+  ribbonBoard(t, p, W, plot) {
+    const rows = (p.load || []).filter((r) => r.n > 0);
+    const strip = h_flex().w_full().h(8).flex_none().rounded(4).overflow_hidden()
+      .children(rows.map((r) => div().h_full().flex_grow(r.n).bg(ACTOR_INK(t, r.kind))
+        .opacity(r.kind === "none" || r.kind === "other" ? 0.22 : 1)));
+    const chips = h_flex().w_full().gap(12).items_center().overflow_hidden()
+      .children(rows.map((r) => h_flex().flex_none().gap(4).items_center()
+        .child(dot(ACTOR_INK(t, r.kind), 5))
+        .child(div().text_size(9).text_color(r.kind === "you" ? t.foreground : t.muted)
+          .child(`${r.name} ${r.n}`))));
+    return h_flex().size_full().px(8).gap(12).items_center()
+      .child(v_flex().w(112).flex_none().gap(2)
+        .child(div().text_size(11).font_semibold().child("in court now"))
+        .child(div().text_size(9).text_color(t.dim).child(`${p.total} live`)))
+      .child(plot([v_flex().h_full().w_full().justify_center().gap(7).child(strip).child(chips)]))
+      .child(v_flex().w(112).flex_none().items_end().gap(2)
+        .child(div().text_size(10).text_color(p.needsYou ? t.accent : t.dim)
+          .child(p.needsYou ? `${p.needsYou} on you` : "nothing on you"))
+        .child(div().text_size(9).text_color(t.dim).child("pick one to trace")));
   }
 
   panel(ctx) {
@@ -589,7 +810,12 @@ export default class Tsk extends View {
       .child(h_flex().id(`task-${id}`).h(27).pl(27).pr(8).gap(6).items_center().rounded(5).cursor_pointer()
         .hover((s) => s.bg(open ? t.selected : t.hover)).when(open, (el) => el.bg(t.selected))
         .on_mouse_down("left", stop)
-        .on_click((_e, cx) => { this.openTask = open ? null : task.id; cx.notify(); })
+        .on_click((_e, cx) => {
+          this.openTask = open ? null : task.id;
+          this.sel = task.number;
+          this.publish();
+          cx.notify();
+        })
         .child(dot(STATUS_COLOR(t, task.status), 6))
         .child(div().w(28).flex_none().text_size(S().label).text_color(t.muted).child(`T${task.number}`))
         .child(div().flex_1().min_w(0).truncate().text_size(S().secondary).child(task.title))

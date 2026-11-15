@@ -8,7 +8,7 @@ import {
   snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
   hcRunArgs, taskTerminal, isLive,
   actorIdOf, actorKindOf, actorOf, holderOf, needsYou, courtSince, ageOf, eventsOf, custodyOf,
-  linksOf, linkOf, groupBy,
+  linksOf, linkOf, groupBy, traceOf, loadOf,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -546,4 +546,41 @@ test("groupBy: stage order is the panel's own, space groups fall back to `no spa
   const bySpace = groupBy(rows, "space", { links });
   assert.deepEqual(bySpace.map((g) => g.key), ["sp1", ""]);
   assert.deepEqual(bySpace[0].rows.map((t) => t.number), [3]);
+});
+
+test("traceOf is the payload the ribbon draws: holder, stretches, beads, and when", () => {
+  const opened = NOW - 45 * 60000;
+  const actors = [{ id: "pi", name: "Pi", kind: "agent" }];
+  const tr = traceOf(
+    mine(31, "review", { title: "Drop the legacy path", review: { at: sec(opened), on: "you", by: "pi" } }),
+    { now: NOW, actors },
+  );
+  assert.equal(tr.mode, "task");
+  assert.equal(tr.n, 31);
+  assert.equal(tr.at, NOW);
+  assert.deepEqual(tr.holder, { id: "you", name: "you", kind: "you", live: false });
+  assert.equal(tr.age, 45);
+  assert.deepEqual(tr.actors, [{ id: "pi", name: "Pi", kind: "agent" }]);
+  assert.deepEqual(tr.segments, [{ actor: "you", from: opened, to: NOW, kind: "you", source: "court" }]);
+  assert.deepEqual(tr.events.map((e) => [e.kind, e.label, e.by]), [["review", "review", "pi"]]);
+  assert.equal(traceOf(mine(1, "open"), { now: NOW }).holder, null);
+});
+
+test("loadOf: one entry per court, nobody included, with the oldest wait", () => {
+  const rows = [
+    mine(1, "review", { review: { on: "you", at: sec(NOW - 30 * 60000) } }),
+    mine(2, "review", { review: { on: "you", at: sec(NOW - 90 * 60000) } }),
+    mine(3, "started", { assignee: "pi" }),
+    mine(4, "open"),
+  ];
+  const load = loadOf(rows, { now: NOW, actors: [{ id: "pi", name: "Pi", kind: "agent" }] });
+  assert.equal(load.mode, "board");
+  assert.equal(load.total, 4);
+  assert.equal(load.needsYou, 2);
+  assert.deepEqual(load.load.map((g) => [g.id, g.name, g.n, g.oldest]), [
+    ["you", "you", 2, 90],
+    ["pi", "Pi", 1, null],
+    ["", "nobody", 1, null],
+  ]);
+  assert.deepEqual(loadOf(null).load, []);
 });

@@ -1,7 +1,8 @@
 # herdr-work
 
 A [Herdr](https://herdr.dev) desktop layout: `main`'s window with one more column — **tsk**'s task progress
-across every project — switched from the tab bar, right where you work.
+across every project — switched from the tab bar, right where you work. A 64px ribbon under the tabs draws
+whose court the task you pick is in.
 
 ![herdr-work](preview.png)
 
@@ -12,11 +13,19 @@ across every project — switched from the tab bar, right where you work.
   names the space and tab (`Pi · Fosun Work / 1`). `Done` and the capture input write through
   tsk's own CLI; the tab-bar button carries a badge with the review + blocked count, so you see it with the
   column closed, and a task that changes status while you are elsewhere raises a notification.
+- **tsk ribbon** (`height: 64`) — the one line that was never on screen: who has the baton. With nothing
+  chosen, `in court now`: how many live tasks wait in each actor's court (`You 2 · T73 1 · nobody 12`), and
+  how many of them wait on you. Pick a task in the column and it becomes that task's day — one lane per
+  actor, a bar for every stretch of custody (solid = a machine, outline = a person), a dot for every
+  recorded event, and `holds You · in court 53h 46m` on the right. It draws what tsk records and nothing
+  more: where history does not say whose court a task was in, you get the moments, not an invented
+  hand-over.
 - One **layout node**, not an entry in `main`'s per-space `panel` stack: Herdr's tabs mod rebuilds that stack
   for every space, while a layout node's hidden state is a layout click — it survives space switches and
   restarts.
 
-**中文速览**：在 Herdr 的 `main` 窗口上加一列 tsk 任务进度（当前 space 的项目排最前，可 `Start`/`Done`/加任务）。
+**中文速览**：在 Herdr 的 `main` 窗口上加一列 tsk 任务进度（当前 space 的项目排最前，可 `Start`/`Done`/加任务），
+再加一条 64px 的 ribbon：没选任务时显示每个 actor 手上压着几件事，选中任务后画出它今天在谁手里流转过。
 `Start` 走 `hc run` 后台起 agent，终端带 `tsk=T<n>` 标签，所以面板能显示是哪个 agent 在跑、是否还在跑、点一下跳回该终端；
 展开任务还能看到它在哪个 space / tab（`Pi · Fosun Work / 1`）；
 任务状态一变就弹通知；刷新频率可在面板上选（关闭 / 5s / 15s / 1m / 5m）。
@@ -61,29 +70,38 @@ root row
 └── work column
     ├── tabs-row (px 42, padding [0, 8])
     │   tabs(weight 1) │ tsk-toggle(px 74)
+    ├── relay-ribbon (px 64, padding [0, 8])   tsk's third role: the custody ribbon
     ├── work-body row (padding 8, gap 8)
     │   ├── main                    the active tab's terminals
     │   ├── panel (px 368, hidden)  main's own files / changes stack
-    │   └── tsk-panel (px 330, min 260, max 620)
+    │   └── tsk-panel (px 380, min 300, max 720)
     └── status (px 28)
 ```
 
-The toggle is the same mod as the panel, with `props: {role: "toggle"}`:
+All three pieces are the same mod, chosen by `props.role` — `toggle`, `ribbon`, or the default `panel`:
 
 ```json
 { "id": "tsk-toggle", "type": "block", "size": { "px": 74 },
   "content": { "mod": "tsk", "props": { "role": "toggle" } } }
 ```
 
-and each column is a wrapper (which is what drags) around a block (which fills it):
+and the ribbon is one block, `padding` on the block keeping it flush with the body below:
 
 ```json
-{ "id": "tsk-panel", "type": "column", "size": { "px": 330 }, "min": 260, "max": 620,
+{ "id": "relay-ribbon", "type": "block", "size": { "px": 64 }, "padding": [0, 8],
+  "content": { "mod": "tsk", "props": { "role": "ribbon" } } }
+```
+
+Columns are wrappers (which is what drags) around a block (which fills it):
+
+```json
+{ "id": "tsk-panel", "type": "column", "size": { "px": 380 }, "min": 300, "max": 720,
   "children": [ { "id": "tsk", "type": "block", "content": { "mod": "tsk" } } ] }
 ```
 
 Widths are remembered when you drag them. `main` keeps ~1150px for itself, so at 1920 the column fits with the
-sidebar rail (76px); with the full 268px sidebar, or below ~1440, close the column. `ctrl-shift-b` folds the
+sidebar rail (76px); with the full 268px sidebar, or below ~1440, close the column (the ribbon stays, it is
+the row that costs 64px). `ctrl-shift-b` folds the
 sidebar, `ctrl-shift-l` goes back to `main`.
 
 ## What the tsk column reads

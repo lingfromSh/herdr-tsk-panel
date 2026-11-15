@@ -114,6 +114,19 @@
           ]
         },
         {
+          "id": "relay-ribbon",
+          "type": "block",
+          "content": {
+            "mod": "tsk",
+            "props": {
+              "role": "ribbon"
+            }
+          },
+          "size": {
+            "px": 64
+          }
+        },
+        {
           "id": "work-body",
           "type": "row",
           "children": [
@@ -183,10 +196,10 @@
               "id": "tsk-panel",
               "type": "column",
               "size": {
-                "px": 330
+                "px": 380
               },
-              "min": 260,
-              "max": 620,
+              "min": 300,
+              "max": 720,
               "children": [
                 {
                   "id": "tsk",

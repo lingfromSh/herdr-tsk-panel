@@ -1,9 +1,10 @@
 # herdr-work
 
 Herdr's `main` layout with one column added beside the terminal: tsk's task progress across every
-tsk project (what waits on your review, what is blocked, what is moving), and one button that starts an
-agent on a task through `hc` and finds that agent again afterwards. The column is switched from the tab
-bar, so a narrow window can drop it without losing it.
+tsk project (what waits on your review, what is blocked, what is moving), one button that starts an
+agent on a task through `hc` and finds that agent again afterwards, and a 64px ribbon under the tab bar
+that draws whose court the chosen task's baton is in. The column is switched from the tab bar, so a
+narrow window can drop it without losing it.
 
 ![herdr-work](preview.png)
 
@@ -13,14 +14,22 @@ Left to right, the window is still `main`'s:
 
 - **Sidebar** (`px 268`, `min 44`, `max 480`, not resizable): brand, `spaces`, `agents`, footer — untouched
   from `main`. Narrowed under 160px it becomes the numbered rail that `main` ships.
-- **Work column** (not resizable), three rows: the tab bar, the body, the status bar.
+- **Work column** (not resizable), four rows: the tab bar, the ribbon, the body, the status bar.
 - **Tab bar row** (`px 42`, not resizable, `padding [0, 8]`): the tabs strip (`weight 1`, keeps
   `window_drag`) then one fixed button — `tsk-toggle` (`px 74`). It is the same mod as the panel with
   `"props": {"role": "toggle"}`: a 26px-high rounded button with the mod's mark, the name at 12px, and a
   count pill when something needs you. The 8px right padding is what keeps the button off the window edge.
+- **Ribbon row** (`px 64`, `padding [0, 8]`): the same mod with `"props": {"role": "ribbon"}`. With
+  nothing chosen it is the board — `in court now`, `15 live`, a proportional strip of how many live tasks
+  sit in each actor's court, a chip row (`You 2 · T73 1 · nobody 12`), and `2 on you` / `pick one to trace`
+  on the right. Choosing a task in the panel turns it into that task's custody: one lane per actor, a bar
+  per stretch of custody (solid = a machine, outline = a person), a bead per recorded event, an hour grid,
+  a dot on the right edge where the baton sits now, and `T78 review — holds You — in court 53h 46m`.
+  Nothing chosen, nothing invented: a task whose history does not say whose court it was in gets one lane
+  of beads called `changes`, not a made-up hand-over.
 - **Body row** (`row`, `padding 8`, `gap 8`): the active tab's terminals, `main`'s hidden
-  files/changes `panel` (`px 368`, `min 280`, `max 900`, `hidden`), `tsk-panel` (`px 330`, `min 260`,
-  `max 620`).
+  files/changes `panel` (`px 368`, `min 280`, `max 900`, `hidden`), `tsk-panel` (`px 380`, `min 300`,
+  `max 720`).
 - **Status bar** (`px 28`), unchanged.
 
 The tsk column is a card: white surface, 10px radius, 1px border, one column of:
@@ -82,6 +91,10 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
 - Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
   (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
   keys of its own and ships no `keys.json`; everything else is Herdr's.
+- The ribbon never talks back. The panel publishes `shared("tsk.trace")` and `shared("tsk.sel")` after
+  every refetch and on every selection; Herdr re-renders *every* mod when a shared value changes, so a
+  ribbon that published would redraw itself forever. It reads `shared("tsk.trace")`, measures itself
+  through `on_size_change` (re-rendering once when the width moves more than 4px), and that is all.
 - Nothing moves on its own except the progress bars (they follow `tsk`'s data), the interval loop and the
   pill count.
 
@@ -96,14 +109,15 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
     ├── tabs-row (row px 42, resizable false, padding [0,8])   ← new wrapper
     │   ├── tabs          (block weight 1, window_drag, mod "tabs")
     │   └── tsk-toggle    (block px 74,  mod "tsk",       props {role:"toggle"})
+    ├── relay-ribbon (block px 64, padding [0,8], mod "tsk", props {role:"ribbon"})   ← new
     ├── work-body (row, padding 8, gap 8)            ← from main, children added
     │   ├── main        (block, the active tab's terminals)
     │   ├── panel       (column px 368, hidden)      ← from main, files/changes
-    │   └── tsk-panel   (column px 330, min 260, max 620) [block mod "tsk"]
+    │   └── tsk-panel   (column px 380, min 300, max 720) [block mod "tsk"]
     └── status (px 28)                               ← from main
 ```
 
-`mods/tsk/` — one mod, two roles via `props.role`: `panel` (a `View`) and `toggle`.
+`mods/tsk/` — one mod, three roles via `props.role`: `panel` (a `View`), `toggle` and `ribbon`.
 
 - `main.js` imports `herdr` and draws both. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
   `terminals`, `home`, `knownAgents`, `notify`, `playSound`, `shared`, `setShared`, `theme`, `settings`,
@@ -125,7 +139,9 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
   stamp, newest `status_set`, creation). `eventsOf` is the beads. `custodyOf` returns the stretches of
   custody — the current holder's alone until a ledger of observed moves is passed in, and it never
   draws a lane it cannot justify. `linksOf` / `linkOf` find the tab serving a task, and `groupBy` groups
-  by `holder`, `stage` or `space` with each group's oldest wait.
+  by `holder`, `stage` or `space` with each group's oldest wait. `traceOf` packs one task into what the
+  ribbon draws (`mode: "task"`, holder, since, age, segments, events, the actors it met) and `loadOf` packs
+  the whole board (`mode: "board"`, `total`, `needsYou`, one row per court) — both pure, both tested.
 - Which agent Start runs: `props.run` if the panel block carries one (an argv, e.g. `["pi"]`), else
   `knownAgents()` (Herdr's list of agents with a `run`, most picked first) filtered to what is installed,
   matched by `props.agent` (key or name) or else the first; `props.agent: "none"` makes Start status-only.
@@ -151,6 +167,11 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 - **QuickJS**: `??` may not mix with `||` or `&&` without parentheses — `node --check` accepts it,
   `herdr-app check` does not. Run `make check`.
 - No `setShared` or `cx.notify()` during render; state changes go through `later(cx, …)` or a spawn.
+  `setShared` re-renders every mod — publisher and subscriber — so keep the direction one-way (the panel
+  publishes, the ribbon reads) or the two will ping-pong.
+- `herdr-app check` validates syntax and the QuickJS dialect, not the element API: `.text_align()` passed
+  the check and the window answered `unknown element method 'text_align'`. A wrong method shows as a red
+  "This view could not be re-rendered" band, so a screenshot is still part of the loop.
   `.child(null)` throws — use `.children([…].filter(Boolean))` or `.when()`.
 - Element ids carry project paths and task ids, so they go through `idOf()`; the same id twice in one tree
   is a bug.
