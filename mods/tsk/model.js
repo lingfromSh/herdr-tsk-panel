@@ -74,6 +74,8 @@ function normalize(row) {
     project: row && row.project != null ? String(row.project) : null,
     thread: row && row.thread ? String(row.thread) : null,
     assignee: row && row.assignee ? String(row.assignee) : null,
+    assigneeKind: row && row.assignee_kind ? String(row.assignee_kind) : null,
+    after: row && Array.isArray(row.after) ? row.after : null,
     block: (row && row.block) || null,
     review: (row && row.review) || null,
   };
@@ -402,3 +404,310 @@ export function taskTerminal(task, terminals) {
 
 /** A terminal that is still running. `--keep` leaves a finished one listed, never live. */
 export const isLive = (term) => Boolean(term) && term.state === "live";
+
+// ---- The relay: whose court a task is in, and for how long ----
+
+/**
+ * The actor id inside tsk's `on` / `assignee` fields, in one space: `you`, an agent's or a
+ * person's name, or `task:<n>` for "waiting on another task". `agent:` / `person:` prefixes are
+ * dropped, `me` is you, and anything else (`other:<text>`) is kept as it was written.
+ */
+export function actorIdOf(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (text === "me" || text === "you" || text === "user") return "you";
+  const at = text.indexOf(":");
+  if (at < 0) return text;
+  const kind = text.slice(0, at).toLowerCase();
+  const rest = text.slice(at + 1).trim();
+  if (!rest) return null;
+  if (kind === "agent" || kind === "person") return rest;
+  if (kind === "user") return "you";
+  // `task:T12` and `task:12` name the same task
+  if (kind === "task") return `task:${rest.replace(/^T/i, "")}`;
+  return text;
+}
+
+/** How an actor id reads: the kind picks the glyph and the ink, so a name never has to. */
+export function actorKindOf(id, actors = []) {
+  const hit = (actors || []).find((a) => a && a.id === id);
+  if (hit && hit.kind) return String(hit.kind);
+  const text = String(id ?? "");
+  if (text === "you") return "you";
+  if (text.startsWith("task:")) return "task";
+  if (text.startsWith("other:")) return "other";
+  return "agent";
+}
+
+function defaultActorName(id) {
+  if (id === "you") return "you";
+  if (id.startsWith("task:")) return `T${id.slice(5)}`;
+  if (id.startsWith("other:")) return id.slice(6);
+  return id;
+}
+
+/** The actor record for an id: a known one keeps its name, an unknown one is named by its id. */
+export function actorOf(id, actors = []) {
+  if (!id) return null;
+  const hit = (actors || []).find((a) => a && a.id === id);
+  return {
+    id,
+    name: hit && hit.name ? String(hit.name) : defaultActorName(id),
+    kind: actorKindOf(id, actors),
+    live: Boolean(hit && hit.live),
+  };
+}
+
+/**
+ * Whose court the baton is in. The holder is the one thing the record always tells us: a review
+ * belongs to its reviewer (`review.on`, or you when the record is missing), a block to
+ * `block.on`, work in progress to whoever it is assigned to, and a task held behind an unfinished
+ * `after` to that task. Null when nobody holds it.
+ */
+export function holderOf(task) {
+  if (!task) return null;
+  const status = String(task.status ?? "");
+  if (status === "review") return actorIdOf(task.review && task.review.on) || "you";
+  if (status === "blocked") return actorIdOf(task.block && task.block.on);
+  if (status === "done") return null;
+  const after = Array.isArray(task.after) ? task.after : [];
+  const waiting = after.find((a) => a && a.done === false);
+  if (waiting) return `task:${String(waiting.task).replace(/^T/i, "")}`;
+  return actorIdOf(task.assignee);
+}
+
+/** It is on you and it is not moving: a review to answer, a block to lift. */
+export const needsYou = (task) =>
+  holderOf(task) === "you" && (task.status === "review" || task.status === "blocked");
+
+/** tsk stamps are `[sec, nsec]` pairs; a plain number is read as seconds or ms, whichever fits. */
+function stampMs(value) {
+  if (value == null) return null;
+  if (Array.isArray(value)) {
+    const sec = Number(value[0]);
+    if (!isFinite(sec)) return null;
+    return Math.round(sec * 1000 + Number(value[1] || 0) / 1e6);
+  }
+  const n = Number(value);
+  if (!isFinite(n) || n <= 0) return null;
+  return n < 1e11 ? Math.round(n * 1000) : Math.round(n);
+}
+
+const historyOf = (task) => (task && Array.isArray(task.history) ? task.history : []);
+
+/**
+ * When the baton reached its current holder, in ms: `review.at` for a review, the block's own
+ * stamp when tsk wrote one, else the newest `status_set` in the task's history, else when the task
+ * was created. Null when the record carries no clock at all.
+ */
+export function courtSince(task) {
+  if (!task) return null;
+  if (task.status === "review" && task.review) {
+    const at = stampMs(task.review.at);
+    if (at != null) return at;
+  }
+  if (task.status === "blocked" && task.block) {
+    const at = stampMs(task.block.at);
+    if (at != null) return at;
+    const since = stampMs(task.block.since);
+    if (since != null) return since;
+  }
+  const sets = historyOf(task)
+    .filter((e) => e && e.kind === "status_set")
+    .map((e) => stampMs(e.at))
+    .filter((n) => n != null);
+  if (sets.length) return Math.max(...sets);
+  return stampMs(task.created_at);
+}
+
+/** How long the holder has had it, in minutes. Null when nothing in the record says. */
+export function ageOf(task, now = Date.now()) {
+  const since = courtSince(task);
+  if (since == null) return null;
+  return Math.max(0, Math.round((Number(now) - since) / 60000));
+}
+
+const EVENT_LABEL = {
+  status_set: "status", created: "created", completed: "completed", archived: "archived",
+  edited: "edited", replied: "replied", check_set: "check", step_added: "step +",
+  step_checked: "step \u2713", step_unchecked: "step \u2717", step_renamed: "step \u270e",
+  step_removed: "step \u2212", review: "review", blocked: "blocked",
+};
+
+/**
+ * The beads on a bar: everything the record says happened, oldest first, as `{at, kind, by, label}`.
+ * Straight from `history` when the caller read the store; the lean feed only yields the review
+ * opening and the creation, which is still two true points.
+ */
+export function eventsOf(task) {
+  const out = [];
+  const seen = new Set();
+  const add = (rawAt, kind, by) => {
+    const at = stampMs(rawAt);
+    if (at == null) return;
+    const key = `${kind}:${at}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ at, kind, by: by ? actorIdOf(by) : null, label: EVENT_LABEL[kind] || String(kind).replace(/_/g, " ") });
+  };
+  for (const e of historyOf(task)) if (e) add(e.at, String(e.kind || ""), e.by);
+  if (task && task.review) add(task.review.at, "review", task.review.by);
+  if (task) add(task.created_at, "created", null);
+  return out.sort((a, b) => a.at - b.at);
+}
+
+const closeSegs = (segs) => {
+  const out = [];
+  for (const s of segs) {
+    // a stretch that begins and ends in the same instant says nothing a bead does not
+    if (s.from != null && s.to != null && s.to <= s.from) continue;
+    const last = out[out.length - 1];
+    if (last && last.actor === s.actor && last.to === s.from && last.source === s.source) last.to = s.to;
+    else out.push({ ...s });
+  }
+  return out;
+};
+
+/**
+ * The stretches of custody, oldest first: `{actor, from, to, kind, source}`. A ledger entry
+ * (`{actor, at}` — this mod watching the baton move) gives a real handoff time; without one the
+ * only provable stretch is the current holder's, from `courtSince` to now. A lane is never
+ * invented: no holder and no ledger means no segments.
+ */
+export function custodyOf(task, now = Date.now(), ledger = []) {
+  const end = Number(now);
+  const moves = (Array.isArray(ledger) ? ledger : [])
+    .map((e) => ({ actor: actorIdOf(e && e.actor), at: stampMs(e && e.at) }))
+    .filter((e) => e.actor && e.at != null && e.at <= end)
+    .sort((a, b) => a.at - b.at);
+
+  const holder = holderOf(task);
+  const since = courtSince(task);
+  const lastMove = moves[moves.length - 1];
+  // the move that ended the ledger's last stretch: the holder's takeover, when the holder is new
+  const takeover = holder && !(lastMove && lastMove.actor === holder)
+    ? (lastMove
+      ? Math.max(lastMove.at, since == null ? lastMove.at : Math.min(since, end))
+      : (since == null ? null : Math.min(since, end)))
+    : null;
+
+  const segs = moves.map((m, i) => {
+    const next = i + 1 < moves.length ? moves[i + 1].at : (takeover == null ? end : takeover);
+    return { actor: m.actor, from: m.at, to: next, kind: actorKindOf(m.actor), source: "ledger" };
+  });
+
+  if (holder && takeover != null) {
+    segs.push({
+      actor: holder,
+      from: takeover,
+      to: end,
+      kind: actorKindOf(holder),
+      source: lastMove ? "observed" : "court",
+    });
+  } else if (holder && !lastMove) {
+    const from = since == null ? null : Math.min(since, end);
+    segs.push({ actor: holder, from, to: end, kind: actorKindOf(holder), source: "court" });
+  }
+  return closeSegs(segs);
+}
+
+/** A tab's task number, however the tab spells it: `task: 12`, `task: {number: 12}`, `tsk="T12"`. */
+function tabTaskOf(value) {
+  if (value == null) return null;
+  if (typeof value === "object") return tabTaskOf(value.number);
+  const n = Number(String(value).replace(/^T/i, ""));
+  return isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Every place a task can be open, flat: an agent's terminal carries `tsk=T<n>` in its labels
+ * (`hc run` is given it), and a tab may name a task itself. The CRLF of the caller's adapters stays
+ * in `main.js`; this only needs the plain fields.
+ */
+export function linksOf(terminals = [], spaces = []) {
+  const out = [];
+  for (const row of Array.isArray(terminals) ? terminals : []) {
+    if (!row) continue;
+    const labels = row.labels || {};
+    const n = tabTaskOf(labels.tsk);
+    if (!n) continue;
+    out.push({
+      n,
+      tab: row.tab ? String(row.tab) : null,
+      space: row.space ? String(row.space) : null,
+      name: String(row.title || row.name || ""),
+      live: String(row.state || "") === "live",
+      via: "terminal",
+    });
+  }
+  for (const space of Array.isArray(spaces) ? spaces : []) {
+    if (!space) continue;
+    for (const tab of Array.isArray(space.tabs) ? space.tabs : []) {
+      if (!tab) continue;
+      const n = tabTaskOf(tab.task);
+      if (!n) continue;
+      if (out.some((l) => l.n === n && l.tab === tab.id)) continue;
+      out.push({
+        n,
+        tab: tab.id ? String(tab.id) : null,
+        space: space.id ? String(space.id) : null,
+        name: String(tab.name || ""),
+        live: Boolean(tab.live),
+        via: "tab",
+      });
+    }
+  }
+  return out;
+}
+
+/** Where the task is open right now: the live tab first, then any tab that names it. Null if none. */
+export function linkOf(task, links = []) {
+  if (!task) return null;
+  const hits = (Array.isArray(links) ? links : []).filter((l) => l && l.n === task.number);
+  return hits.find((l) => l.live) || hits[0] || null;
+}
+
+/** Inside a group: whatever waits on you first, then the newest — the board's own order. */
+const GROUP_KIND_ORDER = { you: 0, agent: 1, person: 2, task: 3, other: 4, none: 5 };
+
+/**
+ * The board grouped by who must act next (`holder`), by stage, or by space: `{key, title, kind,
+ * rows, oldest}` per group, groups in the order a person reads them. `oldest` is the age in minutes
+ * of the longest wait inside the group, or null when no row carries a clock.
+ */
+export function groupBy(tasks, by = "holder", { now = Date.now(), actors = [], links = [] } = {}) {
+  const groups = new Map();
+  const at = (key, title, kind) => {
+    if (!groups.has(key)) groups.set(key, { key, title, kind, rows: [], oldest: null });
+    return groups.get(key);
+  };
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task) continue;
+    let g;
+    if (by === "stage") {
+      g = at(task.status, LABEL[task.status] || String(task.status), "stage");
+    } else if (by === "space") {
+      const link = linkOf(task, links);
+      g = link && link.space ? at(link.space, link.space, "space") : at("", "no space", "space");
+    } else {
+      const id = holderOf(task);
+      const actor = actorOf(id, actors);
+      g = id ? at(id, actor.name, actor.kind) : at("", "nobody", "none");
+    }
+    g.rows.push(task);
+    const age = ageOf(task, now);
+    if (age != null && (g.oldest == null || age > g.oldest)) g.oldest = age;
+  }
+  const out = [...groups.values()];
+  for (const g of out) g.rows.sort(byAttention);
+  const rank = (g) => {
+    if (by === "stage") return STATUSES.indexOf(g.key) >= 0 ? STATUSES.indexOf(g.key) : STATUSES.length;
+    if (by === "space") return g.key ? 0 : 1;
+    return GROUP_KIND_ORDER[g.kind] != null ? GROUP_KIND_ORDER[g.kind] : 9;
+  };
+  return out.sort((a, b) =>
+    rank(a) - rank(b) ||
+    b.rows.length - a.rows.length ||
+    (b.oldest || 0) - (a.oldest || 0) ||
+    (a.title < b.title ? -1 : a.title > b.title ? 1 : 0));
+}

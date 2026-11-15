@@ -7,6 +7,8 @@ import {
   agentBrief, pickAgent, launchArgs, hcError, agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
   hcRunArgs, taskTerminal, isLive,
+  actorIdOf, actorKindOf, actorOf, holderOf, needsYou, courtSince, ageOf, eventsOf, custodyOf,
+  linksOf, linkOf, groupBy,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -332,4 +334,216 @@ test("isLive is the state, not a status: hc keeps a finished terminal listed", (
   assert.equal(isLive(taskTerminal(task(13, "open", null), [{ address: "t1", name: "tsk-13", state: "live" }])), true);
   assert.equal(isLive(null), false);
   assert.equal(isLive(undefined), false);
+});
+
+// ---- The relay: whose court a task is in ----
+
+const NOW = 1_800_000_000_000;
+const sec = (ms) => [Math.floor(ms / 1000), (ms % 1000) * 1e6];
+const mine = (n, status, more = {}) => task(n, status, "/w/app", more);
+
+test("actorIdOf folds every spelling of a waiting party into one id", () => {
+  assert.equal(actorIdOf("you"), "you");
+  assert.equal(actorIdOf("me"), "you");
+  assert.equal(actorIdOf("user"), "you");
+  assert.equal(actorIdOf("agent:pi"), "pi");
+  assert.equal(actorIdOf("person:dana"), "dana");
+  assert.equal(actorIdOf("pi"), "pi", "an assignee is already a name");
+  assert.equal(actorIdOf("task:T12"), "task:12", "T12 and 12 are the same task");
+  assert.equal(actorIdOf("task:12"), "task:12");
+  assert.equal(actorIdOf("other:design call"), "other:design call", "a stranger keeps their words");
+  assert.equal(actorIdOf(""), null);
+  assert.equal(actorIdOf(null), null);
+  assert.equal(actorIdOf("agent:"), null);
+});
+
+test("actorKindOf reads the kind from the app's list, then from the id's own shape", () => {
+  const actors = [{ id: "pi", name: "Pi", kind: "agent" }, { id: "dana", name: "Dana", kind: "person" }];
+  assert.equal(actorKindOf("pi", actors), "agent");
+  assert.equal(actorKindOf("dana", actors), "person");
+  assert.equal(actorKindOf("you", actors), "you");
+  assert.equal(actorKindOf("task:12", actors), "task");
+  assert.equal(actorKindOf("other:board", actors), "other");
+  assert.equal(actorKindOf("codex", actors), "agent", "an unknown name is a machine until told otherwise");
+});
+
+test("actorOf names an unknown id by itself instead of inventing a person", () => {
+  const actors = [{ id: "dana", name: "Dana", kind: "person", live: false }];
+  assert.deepEqual(actorOf("dana", actors), { id: "dana", name: "Dana", kind: "person", live: false });
+  assert.deepEqual(actorOf("task:12", actors), { id: "task:12", name: "T12", kind: "task", live: false });
+  assert.deepEqual(actorOf("other:board", actors), { id: "other:board", name: "board", kind: "other", live: false });
+  assert.equal(actorOf(null, actors), null);
+});
+
+test("holderOf: review→reviewer, block→whoever is blocking, else the assignee", () => {
+  assert.equal(holderOf(mine(1, "review", { review: { on: "agent:pi" } })), "pi");
+  assert.equal(holderOf(mine(2, "review", { review: { on: "you" } })), "you");
+  assert.equal(holderOf(mine(3, "review", { review: null })), "you", "a review with no record still needs a reader");
+  assert.equal(holderOf(mine(4, "blocked", { block: { on: "person:dana" } })), "dana");
+  assert.equal(holderOf(mine(5, "blocked", { block: null })), null, "a block nobody named has no holder");
+  assert.equal(holderOf(mine(6, "started", { assignee: "pi", assigneeKind: "agent" })), "pi");
+  assert.equal(holderOf(mine(7, "started")), null);
+  assert.equal(holderOf(mine(8, "done", { review: { on: "you" } })), null);
+  assert.equal(holderOf(null), null);
+});
+
+test("holderOf: an unfinished `after` holds the task, and the dependency is the actor", () => {
+  assert.equal(holderOf(mine(9, "ready", { after: [{ task: 72, done: false }] })), "task:72");
+  assert.equal(holderOf(mine(10, "ready", { after: [{ task: 72, done: true }], assignee: "codex" })), "codex");
+  assert.equal(holderOf(mine(11, "ready", { after: [{ task: "T72", done: false }] })), "task:72");
+});
+
+test("needsYou is the two stages that stop moving until a person acts", () => {
+  assert.equal(needsYou(mine(1, "review", { review: { on: "you" } })), true);
+  assert.equal(needsYou(mine(2, "blocked", { block: { on: "you" } })), true);
+  assert.equal(needsYou(mine(3, "review", { review: { on: "dana" } })), false);
+  assert.equal(needsYou(mine(4, "started", { assignee: "me" })), false, "work in progress is not a wait on you");
+  assert.equal(needsYou(mine(5, "ready", { assignee: "me" })), false);
+});
+
+test("courtSince prefers the review's own stamp, then the block's, then history, then creation", () => {
+  const opened = NOW - 40 * 60000;
+  assert.equal(courtSince(mine(1, "review", { review: { at: sec(opened) } })), opened);
+  assert.equal(courtSince(mine(2, "blocked", { block: { since: sec(opened) } })), opened);
+  assert.equal(courtSince(mine(3, "blocked", { block: { at: sec(opened) } })), opened);
+  const history = [
+    { kind: "created", at: sec(NOW - 300 * 60000) },
+    { kind: "status_set", at: sec(NOW - 120 * 60000) },
+    { kind: "status_set", at: sec(NOW - 25 * 60000) },
+    { kind: "edited", at: sec(NOW - 60000) },
+  ];
+  assert.equal(courtSince(mine(4, "started", { history })), NOW - 25 * 60000, "the newest move, not the newest edit");
+  assert.equal(courtSince(mine(5, "open", { created_at: sec(NOW - 90000) })), NOW - 90000);
+  assert.equal(courtSince(mine(6, "open")), null);
+  assert.equal(courtSince(null), null);
+});
+
+test("ageOf is minutes of custody, and null when the record has no clock", () => {
+  assert.equal(ageOf(mine(1, "review", { review: { at: sec(NOW - 78 * 60000) } }), NOW), 78);
+  assert.equal(ageOf(mine(2, "review", { review: { at: sec(NOW - 24000) } }), NOW), 0, "under a minute reads as 0");
+  assert.equal(ageOf(mine(3, "review", { review: { at: sec(NOW + 60000) } }), NOW), 0, "a future stamp clamps to now");
+  assert.equal(ageOf(mine(4, "open")), null);
+});
+
+test("eventsOf: beads oldest first, labelled, and one per real event", () => {
+  const opened = NOW - 40 * 60000;
+  const made = NOW - 400 * 60000;
+  const t = mine(1, "review", {
+    review: { at: sec(opened), by: "pi" },
+    created_at: sec(made),
+    history: [
+      { kind: "status_set", at: sec(opened - 1000) },
+      { kind: "status_set", at: sec(opened - 1000) },
+      { kind: "step_checked", at: sec(NOW - 20000) },
+      { kind: "replied", at: sec(NOW - 10000), by: "me" },
+    ],
+  });
+  const ev = eventsOf(t);
+  assert.deepEqual(ev.map((e) => e.kind), ["created", "status_set", "review", "step_checked", "replied"]);
+  assert.deepEqual(ev.map((e) => e.label), ["created", "status", "review", "step ✓", "replied"]);
+  assert.equal(ev[4].by, "you", "`me` reads as you");
+  assert.equal(ev[1].by, null, "status_set names nobody");
+  assert.ok(ev.every((e, i) => i === 0 || e.at >= ev[i - 1].at));
+});
+
+test("custodyOf, tier 1: the holder's stretch, from when it became theirs", () => {
+  const opened = NOW - 78 * 60000;
+  const segs = custodyOf(mine(1, "review", { review: { at: sec(opened), on: "you" } }), NOW);
+  assert.deepEqual(segs, [{ actor: "you", from: opened, to: NOW, kind: "you", source: "court" }]);
+
+  const noClock = custodyOf(mine(2, "review", { review: { on: "pi" } }), NOW);
+  assert.deepEqual(noClock, [{ actor: "pi", from: null, to: NOW, kind: "agent", source: "court" }]);
+  assert.deepEqual(custodyOf(mine(3, "open"), NOW), [], "nobody holding it, nothing drawn");
+});
+
+test("custodyOf, tier 2: a ledger turns moves into stretches, and the holder keeps the last one", () => {
+  const t1 = NOW - 90 * 60000, t2 = NOW - 60 * 60000;
+  const segs = custodyOf(
+    mine(1, "review", { review: { at: sec(t2), on: "agent:codex" } }),
+    NOW,
+    [{ actor: "agent:pi", at: sec(t1) }, { actor: "codex", at: sec(t2) }],
+  );
+  assert.deepEqual(segs.map((s) => [s.actor, s.from, s.to, s.source]), [
+    ["pi", t1, t2, "ledger"],
+    ["codex", t2, NOW, "ledger"],
+  ], "the ledger's last move is the holder, so it is not drawn twice");
+  assert.equal(segs[0].kind, "agent");
+});
+
+test("custodyOf: a ledger that ends elsewhere hands the stretch to the holder", () => {
+  const t1 = NOW - 90 * 60000, t2 = NOW - 10 * 60000;
+  const segs = custodyOf(
+    mine(1, "review", { review: { at: sec(t2), on: "you" } }),
+    NOW,
+    [{ actor: "pi", at: sec(t1) }],
+  );
+  assert.deepEqual(segs.map((s) => [s.actor, s.from, s.to, s.source]), [
+    ["pi", t1, t2, "ledger"],
+    ["you", t2, NOW, "observed"],
+  ], "the holder's stretch starts at the review's stamp, which is later than the observed move");
+});
+
+test("custodyOf: stale moves are dropped and repeats merge into one stretch", () => {
+  const t1 = NOW - 70 * 60000, t2 = NOW - 50 * 60000;
+  const segs = custodyOf(mine(1, "started", { assignee: "pi" }), NOW, [
+    { actor: "pi", at: sec(t1) },
+    { actor: "pi", at: sec(t2) },
+    { actor: "you", at: sec(NOW + 60000) },
+  ]);
+  assert.deepEqual(segs, [{ actor: "pi", from: t1, to: NOW, kind: "agent", source: "ledger" }]);
+});
+
+test("linksOf flattens labeled terminals and task-named tabs; linkOf prefers what is live", () => {
+  const terminals = [
+    { labels: { tsk: "T31" }, tab: "tb1", space: "sp1", name: "tsk-31", state: "finished" },
+    { labels: { tsk: "T31" }, tab: "tb2", space: "sp1", name: "tsk-31b", state: "live" },
+    { labels: {}, tab: "tb3", space: "sp1", name: "shell", state: "live" },
+  ];
+  const spaces = [{ id: "sp1", tabs: [{ id: "tb4", task: { number: 27 }, name: "T27 tree" }] }];
+  const links = linksOf(terminals, spaces);
+  assert.deepEqual(links.map((l) => [l.n, l.tab, l.live, l.via]), [
+    [31, "tb1", false, "terminal"],
+    [31, "tb2", true, "terminal"],
+    [27, "tb4", false, "tab"],
+  ]);
+  assert.equal(linkOf(mine(31, "review"), links).tab, "tb2", "the running terminal wins");
+  assert.equal(linkOf(mine(27, "started"), links).name, "T27 tree");
+  assert.equal(linkOf(mine(99, "started"), links), null);
+  assert.equal(linkOf(null, links), null);
+  assert.deepEqual(linksOf(null, null), []);
+});
+
+test("groupBy: holder groups read you → agents → people → tasks → nobody, oldest wait kept", () => {
+  const actors = [
+    { id: "you", name: "You", kind: "you" },
+    { id: "pi", name: "Pi", kind: "agent" },
+    { id: "dana", name: "Dana", kind: "person" },
+  ];
+  const rows = [
+    mine(1, "open"),
+    mine(2, "started", { assignee: "pi", history: [{ kind: "status_set", at: sec(NOW - 120 * 60000) }] }),
+    mine(3, "review", { review: { on: "you", at: sec(NOW - 30 * 60000) } }),
+    mine(4, "review", { review: { on: "you", at: sec(NOW - 78 * 60000) } }),
+    mine(5, "blocked", { block: { on: "person:dana" } }),
+    mine(6, "ready", { after: [{ task: 9, done: false }] }),
+  ];
+  const groups = groupBy(rows, "holder", { now: NOW, actors });
+  assert.deepEqual(groups.map((g) => g.key), ["you", "pi", "dana", "task:9", ""]);
+  assert.deepEqual(groups.map((g) => g.title), ["You", "Pi", "Dana", "T9", "nobody"]);
+  assert.deepEqual(groups[0].rows.map((t) => t.number), [4, 3], "oldest first inside a wait");
+  assert.equal(groups[0].oldest, 78);
+  assert.equal(groups[1].oldest, 120);
+  assert.equal(groups[4].oldest, null, "a fresh inbox has no clock");
+});
+
+test("groupBy: stage order is the panel's own, space groups fall back to `no space`", () => {
+  const rows = [
+    mine(1, "open"), mine(2, "review", { review: { on: "you" } }), mine(3, "started", { assignee: "pi" }),
+  ];
+  assert.deepEqual(groupBy(rows, "stage").map((g) => g.key), ["review", "started", "open"]);
+
+  const links = linksOf([{ labels: { tsk: "T3" }, tab: "tb", space: "sp1", state: "live" }], []);
+  const bySpace = groupBy(rows, "space", { links });
+  assert.deepEqual(bySpace.map((g) => g.key), ["sp1", ""]);
+  assert.deepEqual(bySpace[0].rows.map((t) => t.number), [3]);
 });

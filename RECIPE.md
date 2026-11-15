@@ -117,6 +117,15 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
   `pollLabel`, for Start: `hcRunArgs` (the linked path), plus `agentBrief`, `pickAgent`, `launchArgs` (the
   no-`hc` fallback), for liveness: `taskTerminal`, `isLive`; and for the notices: `snapshotOf`,
   `changedTasks`, `alertPlan` (with `ALERTS_MAX = 3` and a `level` per notice).
+- For the relay (see `design/RELAY.md`): `holderOf` — whose court the baton is in, from `review.on`,
+  `block.on`, an unfinished `after`, or the assignee; a review with no record still belongs to you, a
+  block nobody named to nobody. `needsYou` is that plus review/blocked. `actorIdOf` folds every
+  spelling (`me`, `agent:pi`, `person:dana`, `task:T12`) into one id, `actorKindOf` / `actorOf` give it
+  the glyph's kind and a name. `courtSince` / `ageOf` say when the baton arrived (review stamp, block
+  stamp, newest `status_set`, creation). `eventsOf` is the beads. `custodyOf` returns the stretches of
+  custody — the current holder's alone until a ledger of observed moves is passed in, and it never
+  draws a lane it cannot justify. `linksOf` / `linkOf` find the tab serving a task, and `groupBy` groups
+  by `holder`, `stage` or `space` with each group's oldest wait.
 - Which agent Start runs: `props.run` if the panel block carries one (an argv, e.g. `["pi"]`), else
   `knownAgents()` (Herdr's list of agents with a `run`, most picked first) filtered to what is installed,
   matched by `props.agent` (key or name) or else the first; `props.agent: "none"` makes Start status-only.

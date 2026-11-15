@@ -319,7 +319,7 @@ opened`), or absent.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **P0** | `model.js`: `holderOf`, `custodyOf` (tier 1), `needsYou`, `groupBy`, `linkOf`, `ageOf`. Tests. | `node --test tests/` green, no UI change yet |
+| **P0** ✅ | `model.js`: `holderOf`, `custodyOf` (tier 1 + ledger merge), `needsYou`, `groupBy`, `linksOf`/`linkOf`, `courtSince`/`ageOf`, `eventsOf`, `actorIdOf`/`actorOf`, and `normalize` keeping `assignee_kind`/`after`. 16 tests. | `node --test tests/` 47/47 green, no UI change yet |
 | **P1** | `role: "ribbon"` block + layout delta. Read-only. | Selecting a task redraws the instrument; no console errors under QuickJS |
 | **P2** | Panel regrouped by holder, stage ladder, tab chip, age per group, inline ask for done-with-tab, `Approve · N left`. | Board sorts by "who must act next"; done never closes a tab without asking |
 | **P2b** | `relay map` mode + `in court now` load block, both clickable into the board. | The morning question — "what is the shape of today" — answered without opening a task |
