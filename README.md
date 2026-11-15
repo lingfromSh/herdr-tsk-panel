@@ -25,8 +25,8 @@ across every project — switched from the tab bar, right where you work.
 ## Install
 
 ```bash
-git clone https://github.com/lingfromSh/herdr-layouts
-cd herdr-layouts
+git clone https://github.com/lingfromSh/herdr-tsk-panel
+cd herdr-tsk-panel
 ./install.sh                    # copies mods/tsk + layouts/herdr-work.json into ~/.config/herdr-app
 herdr-app do layout.switch '{"name":"herdr-work"}'
 ```
@@ -241,4 +241,4 @@ RECIPE.md                 the brief this layout was built from — read it befor
 - [smarzban/tsk](https://github.com/smarzban/tsk) — the task store behind the column, and the `dispatch` this
   panel's `Start` follows the shape of.
 
-Listed in the Herdr gallery: <https://herdr.dev/layouts/lingfromSh/herdr-layouts/>. MIT.
+Listed in the Herdr gallery: <https://herdr.dev/layouts/lingfromSh/herdr-tsk-panel/>. MIT.

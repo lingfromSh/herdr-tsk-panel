@@ -1,4 +1,4 @@
-# AGENTS.md — herdr-layouts
+# AGENTS.md — herdr-tsk-panel
 
 A Herdr desktop layout plus the one mod it needs. Herdr runs mods in QuickJS with its own UI kit;
 none of this is part of Herdr's Go build.
