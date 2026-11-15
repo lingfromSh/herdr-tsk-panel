@@ -267,6 +267,56 @@ export function reviewLeft(task) {
   return checks.filter((c) => c && c.state === "open").length;
 }
 
+/**
+ * `tsk list --json` carries neither `history` nor `created_at` — only the store does. Fold those in
+ * by task number so `courtSince` can date a wait, and leave every list field as the CLI gave it.
+ */
+export function enrichTasks(tasks, store) {
+  const by = new Map();
+  for (const row of (store && Array.isArray(store.tasks)) ? store.tasks : []) {
+    if (row && row.number != null) by.set(Number(row.number), row);
+  }
+  const list = Array.isArray(tasks) ? tasks : [];
+  if (!by.size) return list;
+  return list.map((task) => {
+    const record = by.get(Number(task && task.number));
+    if (!record) return task;
+    return Object.assign({}, task, {
+      history: Array.isArray(record.history) ? record.history : [],
+      created_at: record.created_at,
+      updated_at: record.updated_at,
+    });
+  });
+}
+
+/**
+ * The relay map: one row per live task, longest wait first, with `pct` = how long it has sat in
+ * its court relative to the longest wait on the board, so the shape of the list is the shape of
+ * the day. A task with no clock sorts last and draws no bar (`pct: 0`).
+ */
+export function mapOf(tasks, { now = Date.now(), actors = [] } = {}) {
+  const rows = [];
+  const at = Number(now);
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (!task) continue;
+    const actor = actorOf(holderOf(task), actors) || { id: "", name: "nobody", kind: "none", live: false };
+    const since = courtSince(task);
+    const age = since == null ? null : Math.max(0, (at - since) / 60000);
+    rows.push({
+      n: task.number, title: String(task.title || ""), project: task.project || null,
+      status: task.status, actor: actor.id, name: actor.name, kind: actor.kind, since, age, pct: 0,
+    });
+  }
+  const oldest = rows.reduce((m, r) => (r.age != null && r.age > m ? r.age : m), 0);
+  for (const r of rows) {
+    r.pct = oldest > 0 && r.age != null ? Math.max(2, Math.round((r.age / oldest) * 1000) / 10) : 0;
+    r.pct = Math.min(100, r.pct);
+  }
+  const weight = (r) => (r.age == null ? -1 : r.age);
+  rows.sort((a, b) => weight(b) - weight(a));
+  return { mode: "map", at, total: rows.length, oldest, rows };
+}
+
 /** The first message a coding agent gets when a task's Start is pressed. */
 export function agentBrief(task, projectPath) {
   const where = task.project || projectPath || "";

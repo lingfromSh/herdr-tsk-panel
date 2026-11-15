@@ -38,12 +38,18 @@ The tsk column is a card: white surface, 10px radius, 1px border, one column of:
 - a strip of at most three chips — `review`, `blocked`, `started` — each a 6px dot plus `1 review`, with
   review and blocked in their status colour and started in muted; `nothing needs you` when empty; the count
   of finished tasks (`1 done`) pinned right;
-- a filter input (`Filter tasks`), a `Board` button and a `by project` chip that cycles to `by court`
-  and `by stage` — then a row of interval chips — `off`, `5s`, `15s`, `1m`, `5m` — one of them selected;
+- a filter input (`Filter tasks`), a `Board` button and a `by project` chip that cycles to `by court`,
+  `by stage` and `relay map` — then a row of interval chips — `off`, `5s`, `15s`, `1m`, `5m` — one of them selected;
 - one card per project: name, `4 live · 1 done`, a progress bar (one colour segment per status, done
   at half opacity), the attention pills (`1 review`, `1 blocked`), and the tasks. By `court` or `stage`
   the cards give way to flat groups (`You · oldest 2d · 2`, `T73`, `nobody`, or `review` / `open`), each
   carrying how many tasks it holds and how long the oldest has waited;
+- in `relay map` the cards and the groups both give way to one bar chart of the day: every live task is
+  a row, longest wait at the top, with `in court now · oldest 5d · 15 live` over it. The 2px rule under
+  each row is how long that task has sat in its court, relative to the longest wait on the board — its
+  colour is whose court that is (dim = nobody), and the age is printed at the end. Clicking a row traces
+  it in the ribbon above. A task with no recorded clock draws no bar and shows `—` instead of an age:
+  the map never invents a wait;
 - a task row, left to right: a five-tick staircase (where it sits in `open → ready → started → review →
   done`, only the standing tick in the status colour, `blocked` parked on `started` in the blocked
   colour), `T<n>`, the title, a tab chip when a terminal or a tab names it (clicking walks to that space
@@ -98,6 +104,12 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
 - Typing: the filter narrows projects and tasks as you type; the capture input adds a task on Enter
   (`tsk add -t <title>`, plus `-p <path>` or `--desk`), and Escape clears the filter. The panel has no
   keys of its own and ships no `keys.json`; everything else is Herdr's.
+- The map needs a clock, and `tsk list --json` has none: its twelve fields carry no `history` and no
+  `created_at`, so before this the only dated wait on the board was an open review. Each refetch
+  therefore also reads `~/.tsk/tsk.json` with `readTextFile` and folds each task's `history` and
+  `created_at` in by number (`enrichTasks`). The read is advisory — a missing store is not an error,
+  the panel just shows `—` where it cannot prove an age — and it is one read per refetch, not one per
+  task.
 - The ribbon never talks back. The panel publishes `shared("tsk.trace")` and `shared("tsk.sel")` after
   every refetch and on every selection; Herdr re-renders *every* mod when a shared value changes, so a
   ribbon that published would redraw itself forever. It reads `shared("tsk.trace")`, measures itself
@@ -126,9 +138,9 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 
 `mods/tsk/` — one mod, three roles via `props.role`: `panel` (a `View`), `toggle` and `ribbon`.
 
-- `main.js` imports `herdr` and draws both. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
+- `main.js` imports `herdr` and draws all three. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
   `terminals`, `home`, `knownAgents`, `notify`, `playSound`, `shared`, `setShared`, `theme`, `settings`,
-  `layout`, `props`. Drawing uses `gpui-kit` (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`,
+  `layout`, `readTextFile` (tsk's store, for the clocks the list omits), `props`. Drawing uses `gpui-kit` (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`,
   `h_flex`, `InputState`, `Input`). Commands it runs: `layout.toggle`, `layout.hide`, `terminal.show`,
   `tab.new` (fallback and Board), and `hc run` / `hc kill` through `hc()`.
 - `model.js` has no Herdr imports: `LIST` (the two-command shell script), `PATHS` (prepends

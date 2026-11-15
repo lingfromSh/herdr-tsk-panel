@@ -11,14 +11,14 @@ import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import {
   exec, run, hc, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout,
-  terminals, notify, playSound, props as blockProps,
+  terminals, notify, playSound, readTextFile, props as blockProps,
 } from "herdr";
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
   filterProjects, idOf, addArgs, statusArgs, archiveArgs, boardOf, taskHint, pickAgent, launchArgs, agentBrief, hcError,
   agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
-  traceOf, loadOf, actorIdOf, linksOf, linkOf, groupBy, stageOf, reviewLeft,
+  traceOf, loadOf, mapOf, enrichTasks, actorIdOf, linksOf, linkOf, groupBy, stageOf, reviewLeft,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
@@ -28,7 +28,7 @@ const SEL = "tsk.sel"; // shared: the task number the ribbon is tracing
 const DESK = "·desk"; // the expanded-set key for tasks that belong to no project
 const POLL_KEY = "tsk.poll"; // localStorage: the interval this panel last used
 const BY_KEY = "tsk.by"; // localStorage: how the list groups — by project, by court, by stage
-const BY = ["project", "court", "stage"];
+const BY = ["project", "court", "stage", "map"];
 
 const NOTICE_MS = 5000;
 
@@ -250,12 +250,16 @@ export default class Tsk extends View {
       } else {
         const parsed = parseList(r.stdout);
         this.error = parsed.error;
-        this.projects = buildProjects(parsed.live, parsed.done, this.openFolders());
+        // The list feed has no `history` and no `created_at`; the store does, and a wait cannot be
+        // dated without them. One read, merged by task number, never fatal.
+        const store = await this.readStore();
+        const live = enrichTasks(parsed.live, store), done = enrichTasks(parsed.done, store);
+        this.projects = buildProjects(live, done, this.openFolders());
         this.done = parsed.done.length;
         this.attachTerminals();
         this.loadedAt = Date.now();
         this.refreshed = true;
-        this.alertsFor(parsed.live.concat(parsed.done));
+        this.alertsFor(live.concat(done));
         if (!this.expanded.size) {
           // First look: unfold whatever the open spaces are working in.
           for (const p of this.projects) if (p.active) this.expanded.add(this.keyOf(p));
@@ -265,6 +269,16 @@ export default class Tsk extends View {
       }
       cx.notify();
     });
+  }
+
+  /** tsk's own store, for the fields the CLI leaves out. Missing or unreadable is not an error. */
+  async readStore() {
+    try {
+      const text = await readTextFile(`${home()}/.tsk/tsk.json`);
+      return text ? JSON.parse(text) : null;
+    } catch (_e) {
+      return null;
+    }
   }
 
   /**
@@ -783,7 +797,7 @@ export default class Tsk extends View {
    * One chip that cycles — three buttons do not fit beside the filter at 380px.
    */
   byChip(t) {
-    const label = { project: "by project", court: "by court", stage: "by stage" }[this.by] || "by project";
+    const label = { project: "by project", court: "by court", stage: "by stage", map: "relay map" }[this.by] || "by project";
     return h_flex().id("by-cycle").h(28).px(7).flex_none().items_center().rounded(6).cursor_pointer()
       .hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
       .on_click((_e, cx) => this.setBy(cx))
@@ -819,7 +833,43 @@ export default class Tsk extends View {
     }
     if (this.by === "project") return v_flex().pt(2).pb(10).gap(2).children(projects.map((p) => this.card(t, p)));
     const tasks = projects.reduce((all, p) => all.concat(filterTasks(p.tasks, this.query)), []);
+    if (this.by === "map") return this.map(t, tasks);
     return this.groups(t, tasks);
+  }
+
+  /**
+   * The relay map: one bar per live task, longest wait at the top. The bar's length is how long the
+   * task has sat in its current court and its colour is whose court that is, so the shape of the
+   * list is the shape of the day — three long bars are three things to answer. A row with no clock
+   * draws no bar rather than an invented one, and clicking a row traces it in the ribbon above.
+   */
+  map(t, tasks) {
+    const m = mapOf(tasks, { now: Date.now(), actors: this.actorsFor(tasks) });
+    return v_flex().pt(2).pb(10).gap(1)
+      .child(h_flex().h(24).pl(10).pr(10).gap(8).items_center()
+        .child(div().flex_1().text_size(S().label).text_color(t.muted).child("in court now"))
+        .when(m.oldest > 0, (el) => el.child(div().text_size(S().label).text_color(t.dim)
+          .child(`oldest ${ageLabel(m.oldest)}`)))
+        .child(div().text_size(S().label).text_color(t.dim).child(`${m.total} live`)))
+      .children(m.rows.map((r) => this.mapRow(t, r)));
+  }
+
+  mapRow(t, r) {
+    const sel = this.sel === r.n, ink = ACTOR_INK(t, r.kind);
+    // A rule under the title, not a wash behind it: on a dark panel a 2px line reads as a bar and
+    // a 10% fill reads as nothing. `nobody` draws dimmer than a court someone actually holds.
+    const solid = r.kind === "none" || r.kind === "other" ? 0.4 : (r.kind === "agent" ? 1 : 0.85);
+    return v_flex().id(`map-${r.n}`).relative().overflow_hidden()
+      .when(sel, (el) => el.bg(t.selected))
+      .child(h_flex().h(25).pl(8).pr(8).gap(6).items_center().cursor_pointer()
+        .hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
+        .on_click((_e, cx) => { this.sel = r.n; this.publish(); cx.notify(); })
+        .child(div().w(32).flex_none().text_size(S().label).text_color(sel ? t.foreground : t.muted).child(`T${r.n}`))
+        .child(div().flex_1().min_w(0).truncate().text_size(S().secondary).child(r.title))
+        .child(dot(ink, 5))
+        .child(div().flex_none().text_size(S().label).text_color(t.dim).child(r.age == null ? "\u2014" : ageLabel(r.age))))
+      .child(div().h(3).pl(8).pr(8).relative()
+        .when(r.pct > 0, (el) => el.child(div().absolute().left(8).bottom(1).h(2).w(`${r.pct}%`).bg(ink).opacity(solid))));
   }
 
   /**

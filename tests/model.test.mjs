@@ -8,7 +8,7 @@ import {
   snapshotOf, changedTasks, alertPlan, INTERVALS, DEFAULT_POLL, parsePoll, pollLabel,
   hcRunArgs, taskTerminal, isLive,
   actorIdOf, actorKindOf, actorOf, holderOf, needsYou, courtSince, ageOf, eventsOf, custodyOf,
-  linksOf, linkOf, groupBy, traceOf, loadOf, RAIL, stageOf, reviewLeft,
+  linksOf, linkOf, groupBy, traceOf, loadOf, mapOf, enrichTasks, RAIL, stageOf, reviewLeft,
 } from "../mods/tsk/model.js";
 
 const task = (number, status, project, more = {}) =>
@@ -600,4 +600,44 @@ test("reviewLeft counts only the checks still open", () => {
   assert.equal(reviewLeft({ status: "review", review: { checks } }), 2);
   assert.equal(reviewLeft({ status: "started", review: { checks } }), 2);
   assert.equal(reviewLeft({ status: "review", review: { checks: [] } }), 0);
+});
+
+test("mapOf: longest wait first, width relative to the oldest, no clock sorts last", () => {
+  const rows = [
+    mine(1, "review", { review: { on: "you", at: sec(NOW - 120 * 60000) } }),
+    mine(2, "started", { assignee: "pi", history: [{ kind: "status_set", at: sec(NOW - 10 * 60000) }] }),
+    mine(3, "open"),
+  ];
+  const map = mapOf(rows, { now: NOW, actors: [{ id: "pi", name: "Pi", kind: "agent" }] });
+  assert.equal(map.mode, "map");
+  assert.equal(map.total, 3);
+  assert.equal(map.oldest, 120);
+  assert.deepEqual(map.rows.map((r) => [r.n, r.kind, r.pct]), [
+    [1, "you", 100],
+    [2, "agent", 8.3],
+    [3, "none", 0],
+  ]);
+  assert.equal(map.rows[0].name, "you");
+  assert.equal(map.rows[1].name, "Pi");
+  assert.equal(map.rows[2].age, null);
+  assert.deepEqual(mapOf(null).rows, []);
+  assert.equal(mapOf([mine(4, "open")], { now: NOW }).oldest, 0);
+});
+
+test("enrichTasks folds the store's history in, without touching the list fields", () => {
+  const rows = [mine(1, "open"), mine(2, "review", { review: { on: "you", at: sec(NOW - 30 * 60000) } })];
+  const store = { tasks: [
+    { number: 1, history: [{ kind: "status_set", at: sec(NOW - 90 * 60000) }], created_at: sec(NOW - 200 * 60000) },
+    { number: 9, history: [] },
+  ] };
+  const out = enrichTasks(rows, store);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[0].history.map((e) => e.kind), ["status_set"]);
+  assert.equal(out[0].status, "open");
+  assert.equal(out[1].history, undefined);
+  // The fold is what makes a wait datable: without it the open task has no clock, with it, 90m.
+  assert.equal(courtSince(rows[0]), null);
+  assert.equal(Math.round((NOW - courtSince(out[0])) / 60000), 90);
+  assert.equal(enrichTasks(rows, null).length, 2);
+  assert.deepEqual(enrichTasks(null, store), []);
 });
