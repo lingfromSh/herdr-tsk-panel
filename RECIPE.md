@@ -16,8 +16,16 @@ Left to right, the window is still `main`'s:
   from `main`. Narrowed under 160px it becomes the numbered rail that `main` ships.
 - **Work column** (not resizable), four rows: the tab bar, the ribbon, the body, the status bar.
 - **Tab bar row** (`px 42`, not resizable, `padding [0, 8]`): the tabs strip (`weight 1`, keeps
-  `window_drag`) then one fixed button — `tsk-toggle` (`px 74`). It is the same mod as the panel with
-  `"props": {"role": "toggle"}`: a 26px-high rounded button with the mod's mark, the name at 12px, and a
+  `window_drag`) then one fixed button — `tsk-toggle` (`px 74`). The strip is this mod too
+  (`"props": {"role": "tabs"}`), Herdr's own strip rebuilt with one addition: when a tab hosts an agent
+  terminal labelled `tsk=T<n>`, a chip `T<n>` appears next to the name in the task's stage ink, inverted
+  when that task waits on you — so a tab that finished its work and needs an answer looks different from
+  one still running. Everything the stock strip did is kept (click, double-click rename, drag to reorder,
+  right-click menu, the `+` menu, Files/Changes with the per-space memory, the window buttons on Windows
+  and Linux, the traffic-light offset on macOS), because a chip is not worth losing rename for. The chip
+  also needs two facts the strip cannot get from Herdr: tab objects carry no task field, so the panel
+  publishes `shared("tsk.links")` — tab id → `{n, status, needs, live}` — on every refetch. The fixed button
+  is the same mod with `"props": {"role": "toggle"}`: a 26px-high rounded button with the mod's mark, the name at 12px, and a
   count pill when something needs you. The 8px right padding is what keeps the button off the window edge.
 - **Ribbon row** (`px 64`, `padding [0, 8]`): the same mod with `"props": {"role": "ribbon"}`. With
   nothing chosen it is the board — `in court now`, `15 live`, a proportional strip of how many live tasks
@@ -121,6 +129,9 @@ Colours are Herdr theme tokens only: `review` = `accent`, `blocked` = `blocked`,
   at most once a second (`Date.now() - this.loadedAt > 1000`) and sleeps 250ms after each resolve. A bare
   `for (;;) await watchFolder(dir)` read `tsk` 144 times in 22 seconds and would have kept a core warm.
   The interval chips stay as the safety net: a watch can be refused.
+- The strip must not read tsk. It renders Herdr's live tab state (no `exec` at all, one repaint a second),
+  and the task on a tab comes from `shared("tsk.links")`, published by the panel. Publishing from a strip
+  would re-render every mod — the same ping-pong the ribbon avoids.
 - The ribbon never talks back. The panel publishes `shared("tsk.trace")` and `shared("tsk.sel")` after
   every refetch and on every selection; Herdr re-renders *every* mod when a shared value changes, so a
   ribbon that published would redraw itself forever. It reads `shared("tsk.trace")`, measures itself
@@ -137,7 +148,7 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
 ├── sidebar (column px 268)                          ← from main
 └── work (column, resizable false)                   ← from main
     ├── tabs-row (row px 42, resizable false, padding [0,8])   ← new wrapper
-    │   ├── tabs          (block weight 1, window_drag, mod "tabs")
+    │   ├── tabs          (block weight 1, window_drag, mod "tsk", props {role:"tabs"})
     │   └── tsk-toggle    (block px 74,  mod "tsk",       props {role:"toggle"})
     ├── relay-ribbon (block px 64, padding [0,8], mod "tsk", props {role:"ribbon"})   ← new
     ├── work-body (row, padding 8, gap 8)            ← from main, children added
@@ -147,10 +158,10 @@ root (row, titlebar none, traffic_lights [12,16])   ← from main
     └── status (px 28)                               ← from main
 ```
 
-`mods/tsk/` — one mod, three roles via `props.role`: `panel` (a `View`), `toggle` and `ribbon`.
+`mods/tsk/` — one mod, four roles via `props.role`: `panel` (a `View`), `toggle`, `ribbon` and `tabs`.
 
-- `main.js` imports `herdr` and draws all three. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
-  `terminals`, `home`, `knownAgents`, `notify`, `playSound`, `shared`, `setShared`, `theme`, `settings`,
+- `main.js` imports `herdr` and draws all four. `herdr` calls: `exec`, `hc`, `run`, `spaces`, `focused`,
+  `terminals`, `panes`, `window` (the strip's buttons and the macOS traffic-light offset), `home`, `knownAgents`, `notify`, `playSound`, `shared`, `setShared`, `theme`, `settings`,
   `layout`, `readTextFile` (tsk's store, for the clocks the list omits), `nextCommand` (the `"focus"`
   the app sends when `pane.go` gives the column the keyboard), `watchFolder` (`~/.tsk`, so a status
   changed in a terminal lands without waiting out the interval), `props`. Drawing uses `gpui-kit` (`View`, `div`, `image`, `svg`) and `gpui-base` (`v_flex`,

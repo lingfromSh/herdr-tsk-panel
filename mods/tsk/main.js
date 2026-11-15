@@ -8,10 +8,10 @@
 // the layout's "tsk-panel" node. The toggle reads the shared attention count the panel writes, so
 // the tab bar shows how many tasks wait on you even while the panel is hidden.
 import { View, div, image, svg } from "gpui-kit";
-import { v_flex, h_flex, InputState, Input } from "gpui-base";
+import { v_flex, h_flex, InputState, Input, ScrollHandle } from "gpui-base";
 import {
   exec, run, hc, spaces, focused, home, knownAgents, shared, setShared, theme, settings, layout,
-  terminals, notify, playSound, readTextFile, nextCommand, watchFolder, props as blockProps,
+  terminals, panes, window, notify, playSound, readTextFile, nextCommand, watchFolder, props as blockProps,
 } from "herdr";
 import {
   STATUSES, LABEL, LIST, PATHS, parseList, lastLine, buildProjects, totalsOf, filterTasks,
@@ -19,12 +19,13 @@ import {
   agentName, whereLabel, whoLine, tabMates,
   snapshotOf, changedTasks, alertPlan, INTERVALS, parsePoll, hcRunArgs, taskTerminal, isLive,
   traceOf, loadOf, mapOf, enrichTasks, actorIdOf, linksOf, linkOf, groupBy, stageOf, reviewLeft,
-  keyAction, moveSel,
+  keyAction, moveSel, needsYou,
 } from "./model.js";
 
 const PANEL = "tsk-panel"; // the layout node the toggle shows and hides; hidden state is the layout's, so it survives space switches
 const ATTENTION = "tsk.attention"; // shared: tasks in review or blocked, for the tab-bar badge
-const TRACE = "tsk.trace"; // shared: what the ribbon draws — a task's custody stretches, or the board's load
+const TRACE = "tsk.trace";
+const LINKS = "tsk.links"; // tab id → the task that tab is working on, for the strip // shared: what the ribbon draws — a task's custody stretches, or the board's load
 const SEL = "tsk.sel"; // shared: the task number the ribbon is tracing
 const DESK = "·desk"; // the expanded-set key for tasks that belong to no project
 const POLL_KEY = "tsk.poll"; // localStorage: the interval this panel last used
@@ -185,6 +186,19 @@ export default class Tsk extends View {
       return;
     }
     if (this.role === "toggle") return;
+    if (this.role === "tabs") {
+      // The strip reads Herdr's live state on every render and owns no data of its own: tabs open and
+      // close without telling anyone, so it redraws on a slow clock and on the panel's published
+      // `tsk.links`. Nothing here may call `setShared` — that re-renders every mod.
+      this.pressed = null;
+      this.space = undefined;
+      this.pending = null;
+      this.panels = {};
+      try { this.panels = JSON.parse(localStorage.getItem("panel-picks")) || {}; } catch (_e) { this.panels = {}; }
+      this.scroll = ScrollHandle.new();
+      cx.timer.every(1000, (cx) => cx.notify());
+      return;
+    }
 
     this.handle = cx.focus_handle();
     this.projects = [];
@@ -605,12 +619,151 @@ export default class Tsk extends View {
     if (this.sel != null && !sel) this.sel = null; // done, archived, or filtered away
     setShared(SEL, sel ? sel.number : null);
     setShared(TRACE, sel ? traceOf(sel, { now, actors }) : loadOf(tasks, { now, actors }));
+    // The strip needs three things per tab — which task, at which stage, and whether it waits on you —
+    // and it must not read tsk itself: one publisher, one reader, no ping-pong.
+    const marks = {};
+    for (const link of this.links) {
+      if (!link || !link.tab) continue;
+      const task = tasks.find((x) => x.number === link.n);
+      marks[link.tab] = {
+        n: link.n,
+        status: task ? task.status : "open",
+        needs: task ? needsYou(task) : false,
+        live: Boolean(link.live),
+      };
+    }
+    setShared(LINKS, marks);
   }
 
   // ---- Render ----
 
+  /**
+   * Role "tabs": Herdr's tab bar with the one thing a bar of names cannot say — which task each tab is
+   * working on, at what stage, and which of them is waiting on you. The chip is the whole point; the
+   * rest is the stock strip kept intact, because losing rename, reorder, the new-menu and the panel
+   * toggles would be a bad trade for a chip.
+   */
+  tabsStrip(cx) {
+    const t = theme(), S_ = S(), w = window(), root = layout();
+    const space = spaces().find((p) => p.active);
+    const shown = (space && space.tabs) || [];
+    const active = shown.findIndex((tab) => tab.active);
+    const marks = shared(LINKS) || {};
+    const panel = find(root, "panel"), body = find(root, "panel-body");
+    const enabled = shared("workspace.panels") || ["files", "changes"];
+    this.syncPanel(space, panel, body, enabled);
+
+    const button = (id, label, action) => div().id(id).size(26).flex_none().flex().items_center().justify_center()
+      .rounded(6).text_color(t.dim).hover((s) => s.bg(t.hover).text_color(t.foreground))
+      .on_mouse_down("left", stop).on_click(action).child(label);
+
+    // The task chip: `T<n>` in the task's stage ink, inverted when the task is in your court, so a tab
+    // that is waiting on you reads at a glance from across the screen.
+    const chip = (mark) => {
+      if (!mark) return null;
+      const ink = STATUS_COLOR(t, mark.status);
+      return div().h(15).px(4).flex_none().rounded(3).border(1).border_color(ink)
+        .text_size(S_.label).text_color(ink).child(`T${mark.n}`)
+        .when(mark.needs, (el) => el.bg(ink).text_color(t.background));
+    };
+
+    const item = (tab, i) => {
+      const mark = marks[tab.id] || null;
+      const program = panes().find((p) => p.tab === tab.id && p.program && p.program.agent);
+      const name = /^tb\d+$/.test(tab.name) ? (program && program.program && program.program.name) || "Terminal" : tab.name;
+      return h_flex().id(this.idOf(`tab-${tab.id}`)).h(29).px(10).gap(7).rounded(7).items_center().flex_none()
+        .text_size(12.8)
+        // A rename or a chip on this or an earlier tab can push the active one out.
+        .when(i <= active, (el) => el.on_size_change((_s, cx) => { this.scroll.scroll_to_item(active); cx.notify(); }))
+        .border(1).border_color(tab.active ? t.border : t.chrome).bg(tab.active ? t.raised : t.chrome)
+        .text_color(tab.active ? t.foreground : t.muted).hover((s) => s.bg(t.hover))
+        .on_mouse_down("left", (e, cx) => {
+          cx.stop_propagation(); this.pressed = i;
+          if (e.click_count === 2) run("tab.rename", { id: tab.id });
+        })
+        .on_mouse_up("left", () => {
+          const from = this.pressed; this.pressed = null;
+          if (from !== null && from !== i) run("tab.move", { id: shown[from].id, index: space.tabs.findIndex((x) => x.id === tab.id) + 1 });
+          else run("tab.select", { id: tab.id });
+        })
+        .on_mouse_down("right", (_e, cx) => {
+          cx.stop_propagation();
+          openOverlay({ mod: "menu", kind: "popup", width: 200, props: { tab: "tab", target: { id: tab.id, space: space.id } } });
+        })
+        .child(div().max_w(150).truncate().child(tab.zoomed ? `${name} Z` : name))
+        .when(Boolean(chip(mark)), (el) => el.child(chip(mark)))
+        .when(tab.status === "working", (el) => el.child(svg("mods/workspace-chrome/spinner.svg").size(12).flex_none().text_color(t.working).spin(900)))
+        .when(tab.status === "blocked" || tab.status === "done", (el) => el.child(div().size(6).rounded(3).bg(t[tab.status])));
+    };
+
+    const panelButton = (id, label, icon) => {
+      const on = panel && !panel.hidden && body && body.active === id;
+      return h_flex().id(`panel-${id}`).h(26).px(8).gap(5).flex_none().items_center().rounded(6)
+        .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
+        .hover((s) => s.bg(t.hover)).on_mouse_down("left", stop)
+        .on_click(() => {
+          if (on) run("layout.hide", { id: "panel" });
+          else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+        }).child(svg(icon).size(14).flex_none().text_color(on ? t.foreground : t.muted)).child(label);
+    };
+
+    return h_flex().size_full().min_w(0).px(10).pl(this.lights(root, w)).gap(3).items_center().bg(t.chrome)
+      .border_b(1).border_color(t.border)
+      .on_mouse_up("left", () => { this.pressed = null; })
+      .on_scroll_wheel((e) => { if (Math.abs(e.delta.y) >= 1) run(e.delta.y > 0 ? "tab.prev" : "tab.next"); })
+      .child(h_flex().id("relay-tab-scroll").flex_1().min_w(0).h_full().items_center().gap(3)
+        .overflow_x_scrollbar().track_scroll(this.scroll)
+        .on_size_change((_s, cx) => { if (active >= 0) { this.scroll.scroll_to_item(active); cx.notify(); } })
+        .children(shown.map(item)))
+      .child(button("relay-tab-new", "+", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
+      .when(enabled.indexOf("files") >= 0, (el) => el.child(panelButton("files", "Files", "mods/files/file.svg")))
+      .when(enabled.indexOf("changes") >= 0, (el) => el.child(panelButton("changes", "Changes", "mods/changes/changes.svg")))
+      .when(Boolean(w && w.buttons), (el) => el
+        .child(button("minimize", "\u2212", () => run("window.minimize")))
+        .child(button("maximize", "\u25a1", () => run("window.maximize")))
+        .child(button("close-window", "\u00d7", () => run("window.close"))));
+  }
+
+  // The macOS window buttons sit over the strip's left edge when the sidebar is hidden or narrow, so
+  // the first tab starts after them.
+  lights(root, w) {
+    if (!(w && w.platform === "macos" && w.titlebar === "none" && !w.fullscreen && root && root.traffic_lights)) return 10;
+    const sidebar = find(root, "sidebar");
+    const off = sidebar && sidebar.hidden ? 0 : (sidebar && sidebar.size && sidebar.size.px) || 0;
+    return Math.max(10, ((root.traffic_lights[0] || 12) + 64) / (settings().zoom || 1) - off);
+  }
+
+  // The side panel is remembered per space, exactly as Herdr's own strip does it: switching shows that
+  // space's last choice, and a click records a new one.
+  syncPanel(space, panel, body, enabled) {
+    if (!space || !panel) return;
+    const now = panel.hidden ? null : (body && body.active) || null;
+    if (space.id !== this.space) {
+      const first = this.space === undefined;
+      this.space = space.id; this.pending = null;
+      if (!(first && !(space.id in this.panels))) {
+        const stored = space.id in this.panels ? this.panels[space.id] : null;
+        const want = enabled.indexOf(stored) >= 0 ? stored : null;
+        if (want !== now) {
+          this.pending = { want, until: Date.now() + 1000 };
+          if (want) { run("layout.select", { stack: "panel-body", child: want }); run("layout.show", { id: "panel" }); }
+          else run("layout.hide", { id: "panel" });
+          return;
+        }
+      }
+    }
+    if (this.pending) {
+      if (this.pending.want !== now && Date.now() < this.pending.until) return;
+      this.pending = null;
+    }
+    if (this.panels[space.id] === now) return;
+    this.panels[space.id] = now;
+    try { localStorage.setItem("panel-picks", JSON.stringify(this.panels)); } catch (_e) { /* a full quota is not a crash */ }
+  }
+
   render(cx) {
     if (this.role === "toggle") return toggle();
+    if (this.role === "tabs") return this.tabsStrip(cx);
     if (this.role === "ribbon") return this.ribbon(cx);
     return this.panel(cx);
   }

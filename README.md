@@ -24,6 +24,10 @@ whose court the task you pick is in.
   recorded event, and `holds You · in court 53h 46m` on the right. It draws what tsk records and nothing
   more: where history does not say whose court a task was in, you get the moments, not an invented
   hand-over.
+- **tsk tab strip** — Herdr's tab bar, rebuilt with the task written on it: a tab running an agent for
+  `T78` shows a `T78` chip in that task's stage colour, filled when the task is back in your court, so the
+  bar answers "which tab is finished and waiting for me" without the column being open. Rename, reorder,
+  right-click, `+`, Files/Changes and the window buttons all still work.
 - One **layout node**, not an entry in `main`'s per-space `panel` stack: Herdr's tabs mod rebuilds that stack
   for every space, while a layout node's hidden state is a layout click — it survives space switches and
   restarts.
@@ -34,6 +38,7 @@ whose court the task you pick is in.
 展开任务还能看到它在哪个 space / tab（`Pi · Fosun Work / 1`）；
 任务状态一变就弹通知；`~/.tsk` 被监听，终端里改的状态立刻反映到列上（刷新频率仍可选：关闭 / 5s / 15s / 1m / 5m）；
 列拿到键盘后 `j`/`k` 上下、`Enter` 展开、`s` 启动、`d` 完成、`o` 跳到它的 tab、`t` 切换分组、`/` 过滤。
+标签条也换成了 tsk 的：跑着 agent 的 tab 名字旁会挂一个 `T<n>` chip，颜色是任务阶段，任务回到你手上时变成实心 —— 不用开列就知道哪个 tab 干完了在等你；改名、拖动排序、右键菜单、`+`、Files/Changes 都还在。
 面板放在**布局节点**里而不是每个 space 自己的 `panel` 栈里，所以切 space 不会丢。装法：`./install.sh`，然后 `layout.switch`。
 
 ## Install
